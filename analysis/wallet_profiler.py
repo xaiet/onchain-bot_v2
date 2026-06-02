@@ -313,13 +313,19 @@ def format_wallet_profile(profile: dict) -> str:
 
 # ── Helpers EVM ───────────────────────────────────────────────────────────────
 
+ETHERSCAN_BASE = "https://api.etherscan.io/v2/api"
+ETHERSCAN_CHAIN = "1"  # Ethereum mainnet
+
 def _get_eth_balance(address):
     try:
         r = requests.get(
-            "https://api.etherscan.io/api",
+            ETHERSCAN_BASE,
             params={
-                "module": "account", "action": "balance",
-                "address": address, "tag": "latest",
+                "chainid": ETHERSCAN_CHAIN,
+                "module": "account",
+                "action": "balance",
+                "address": address,
+                "tag": "latest",
                 "apikey": ETHERSCAN_API_KEY
             }, timeout=10
         )
@@ -331,12 +337,17 @@ def _get_eth_balance(address):
 def _get_transactions(address, limit=1000):
     try:
         r = requests.get(
-            "https://api.etherscan.io/api",
+            ETHERSCAN_BASE,
             params={
-                "module": "account", "action": "txlist",
-                "address": address, "startblock": 0,
-                "endblock": 99999999, "page": 1,
-                "offset": limit, "sort": "desc",
+                "chainid": ETHERSCAN_CHAIN,
+                "module": "account",
+                "action": "txlist",
+                "address": address,
+                "startblock": 0,
+                "endblock": 99999999,
+                "page": 1,
+                "offset": limit,
+                "sort": "desc",
                 "apikey": ETHERSCAN_API_KEY
             }, timeout=15
         )
@@ -349,11 +360,15 @@ def _get_transactions(address, limit=1000):
 def _get_token_transfers(address):
     try:
         r = requests.get(
-            "https://api.etherscan.io/api",
+            ETHERSCAN_BASE,
             params={
-                "module": "account", "action": "tokentx",
-                "address": address, "page": 1,
-                "offset": 200, "sort": "desc",
+                "chainid": ETHERSCAN_CHAIN,
+                "module": "account",
+                "action": "tokentx",
+                "address": address,
+                "page": 1,
+                "offset": 200,
+                "sort": "desc",
                 "apikey": ETHERSCAN_API_KEY
             }, timeout=15
         )
