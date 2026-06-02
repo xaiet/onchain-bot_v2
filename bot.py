@@ -3,6 +3,7 @@ import asyncio
 from telegram import Bot, Update
 from telegram.ext import Application, CommandHandler, ContextTypes
 from telegram.constants import ParseMode
+from monitors.wallets import check_all_wallets
 from apscheduler.schedulers.background import BackgroundScheduler
 from config import TELEGRAM_TOKEN, TELEGRAM_CHAT_ID
 from database import (
@@ -12,6 +13,12 @@ from database import (
 )
 from analysis.wallet_profiler import (
     profile_evm_wallet, profile_solana_wallet, format_wallet_profile
+)
+from database import (
+    init_db,
+    get_protocols, add_protocol, remove_protocol,
+    get_wallets, add_wallet, remove_wallet, update_wallet_label,
+    mark_alert_sent
 )
 
 logging.basicConfig(level=logging.INFO)
@@ -181,6 +188,26 @@ async def cmd_wallets(update: Update, context: ContextTypes.DEFAULT_TYPE):
         parse_mode=ParseMode.MARKDOWN
     )
 
+async def send_wallet_alerts():
+    """Job del scheduler — comprova wallets i envia alertes"""
+    alerts = check_all_wallets()
+    if not alerts:
+        return
+
+    bot = Bot(token=TELEGRAM_TOKEN)
+    for alert in alerts:
+        try:
+            await bot.send_message(
+                chat_id=int(TELEGRAM_CHAT_ID),
+                text=alert["message"],
+                parse_mode=ParseMode.MARKDOWN,
+                disable_web_page_preview=True
+            )
+            mark_alert_sent(alert["key"])
+            logger.info(f"Wallet alert enviada: {alert['key']}")
+        except Exception as e:
+            logger.error(f"Error: {e}")
+
 
 # ── Comandaments — Protocols ───────────────────────────────────────────────────
 
@@ -285,6 +312,12 @@ def main():
 
     logger.info("Bot v2 escoltant...")
     app.run_polling(allowed_updates=Update.ALL_TYPES)
+
+    scheduler.add_job(
+        lambda: asyncio.run(send_wallet_alerts()),
+        "interval",
+        minutes=30
+    )
 
 
 if __name__ == "__main__":
