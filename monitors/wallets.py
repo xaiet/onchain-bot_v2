@@ -23,12 +23,10 @@ CEX_ADDRESSES = {
     "0x77696bb39917c91a0c3908d577d5e322095425ca": "Kraken",
 }
 
+ETHERSCAN_BASE = "https://api.etherscan.io/v2/api"
+ETHERSCAN_CHAIN = "1"
 
 def check_evm_wallet(wallet: dict) -> list:
-    """
-    Comprova transaccions recents d'una wallet EVM.
-    Retorna llista d'alertes si hi ha moviments grans.
-    """
     alerts = []
     address = wallet["address"].lower()
     label = wallet["label"] or address[:6] + "..." + address[-4:]
@@ -36,8 +34,9 @@ def check_evm_wallet(wallet: dict) -> list:
 
     try:
         r = requests.get(
-            "https://api.etherscan.io/api",
+            ETHERSCAN_BASE,
             params={
+                "chainid": ETHERSCAN_CHAIN,
                 "module": "account",
                 "action": "txlist",
                 "address": address,
