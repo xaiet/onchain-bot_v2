@@ -4,6 +4,7 @@ from telegram import Bot, Update
 from telegram.ext import Application, CommandHandler, ContextTypes
 from telegram.constants import ParseMode
 from monitors.wallets import check_all_wallets
+from monitors.tvl import check_tvl
 from apscheduler.schedulers.background import BackgroundScheduler
 from config import TELEGRAM_TOKEN, TELEGRAM_CHAT_ID
 from database import (
@@ -208,6 +209,23 @@ async def send_wallet_alerts():
         except Exception as e:
             logger.error(f"Error: {e}")
 
+async def cmd_tvl(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.message.reply_text("📊 Analitzant TVL de la watchlist...")
+    alerts = check_tvl()
+    if not alerts:
+        await update.message.reply_text(
+            "✅ Cap anomalia de TVL detectada.\n"
+            "_Tots els protocols dins la mitjana dels últims 30 dies._",
+            parse_mode=ParseMode.MARKDOWN
+        )
+        return
+    bot = Bot(token=TELEGRAM_TOKEN)
+    for alert in alerts:
+        await update.message.reply_text(
+            alert["message"],
+            parse_mode=ParseMode.MARKDOWN,
+            disable_web_page_preview=True
+        )
 
 # ── Comandaments — Protocols ───────────────────────────────────────────────────
 
@@ -268,6 +286,23 @@ async def cmd_list(update: Update, context: ContextTypes.DEFAULT_TYPE):
         lines.append(f"• {p['name']} (`{p['defillama_slug']}`)")
     await update.message.reply_text("\n".join(lines), parse_mode=ParseMode.MARKDOWN)
 
+async def send_tvl_alerts():
+    alerts = check_tvl()
+    if not alerts:
+        return
+    bot = Bot(token=TELEGRAM_TOKEN)
+    for alert in alerts:
+        try:
+            await bot.send_message(
+                chat_id=int(TELEGRAM_CHAT_ID),
+                text=alert["message"],
+                parse_mode=ParseMode.MARKDOWN,
+                disable_web_page_preview=True
+            )
+            mark_alert_sent(alert["key"])
+        except Exception as e:
+            logger.error(f"Error TVL alert: {e}")
+
 
 # ── Comandament Start ──────────────────────────────────────────────────────────
 
@@ -282,7 +317,8 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "*Protocols*\n"
         "`/add <slug>` — afegeix protocol\n"
         "`/remove <slug>` — elimina protocol\n"
-        "`/list` — llista protocols\n",
+        "`/list` — llista protocols\n"
+        "`/tvl` — estat TVL de la watchlist\n",
         parse_mode=ParseMode.MARKDOWN
     )
 
@@ -309,6 +345,7 @@ def main():
     app.add_handler(CommandHandler("remove", cmd_remove))
     app.add_handler(CommandHandler("list", cmd_list))
     app.add_handler(CommandHandler("start", cmd_start))
+    app.add_handler(CommandHandler("tvl", cmd_tvl))
 
     logger.info("Bot v2 escoltant...")
     app.run_polling(allowed_updates=Update.ALL_TYPES)
@@ -317,6 +354,19 @@ def main():
         lambda: asyncio.run(send_wallet_alerts()),
         "interval",
         minutes=30
+    )
+    # TVL — comprova 2 cops al dia
+    scheduler.add_job(
+        lambda: asyncio.run(send_tvl_alerts()),
+        "cron",
+        hour=8,
+        minute=30
+    )
+    scheduler.add_job(
+        lambda: asyncio.run(send_tvl_alerts()),
+        "cron",
+        hour=18,
+        minute=30
     )
 
 
