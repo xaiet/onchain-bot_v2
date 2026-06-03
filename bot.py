@@ -7,6 +7,7 @@ from monitors.wallets import check_all_wallets
 from monitors.tvl import check_tvl
 from monitors.cex_flows import check_cex_flows
 from monitors.solana import check_solana
+from monitors.digest import build_digest
 from apscheduler.schedulers.background import BackgroundScheduler
 from config import TELEGRAM_TOKEN, TELEGRAM_CHAT_ID
 from database import (
@@ -363,23 +364,49 @@ async def cmd_solana(update: Update, context: ContextTypes.DEFAULT_TYPE):
             disable_web_page_preview=True
         )
 
+async def send_digest():
+    bot = Bot(token=TELEGRAM_TOKEN)
+    try:
+        message = build_digest()
+        await bot.send_message(
+            chat_id=int(TELEGRAM_CHAT_ID),
+            text=message,
+            parse_mode=ParseMode.MARKDOWN,
+            disable_web_page_preview=True
+        )
+        logger.info("Digest enviat")
+    except Exception as e:
+        logger.error(f"Error digest: {e}")
+
+async def cmd_digest(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.message.reply_text("⏳ Construint digest...")
+    try:
+        message = build_digest()
+        await update.message.reply_text(
+            message,
+            parse_mode=ParseMode.MARKDOWN,
+            disable_web_page_preview=True
+        )
+    except Exception as e:
+        await update.message.reply_text(f"❌ Error: {e}")
+
+app.add_handler(CommandHandler("digest", cmd_digest))
+
 # ── Comandament Start ──────────────────────────────────────────────────────────
 
 async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
-        "👋 *OnChain Monitor Bot v2*\n\n"
-        "*Wallets*\n"
-        "`/wallet <addr>` — analitza qualsevol wallet\n"
-        "`/addwallet <addr> <label>` — afegeix al seguiment\n"
-        "`/removewallet <addr>` — elimina del seguiment\n"
-        "`/wallets` — llista wallets seguides\n\n"
-        "*Protocols*\n"
+        "`/digest` — digest complet ara mateix\n"
+        "`/tvl` — TVL watchlist\n"
+        "`/cex` — CEX inflows\n"
+        "`/solana` — clusters Solana\n"
+        "`/wallet <addr>` — analitza wallet\n"
+        "`/addwallet <addr> <label>` — segueix wallet\n"
+        "`/removewallet <addr>` — deixa de seguir\n"
+        "`/wallets` — llista wallets\n"
         "`/add <slug>` — afegeix protocol\n"
         "`/remove <slug>` — elimina protocol\n"
-        "`/list` — llista protocols\n"
-        "`/tvl` — estat TVL de la watchlist\n"
-        "`/cex` — CEX inflows i txns grans en protocols\n"
-        "`/solana` — clusters i liquiditat a Solana\n",
+        "`/list` — llista protocols\n",
         parse_mode=ParseMode.MARKDOWN
     )
 
@@ -440,6 +467,14 @@ def main():
         lambda: asyncio.run(send_solana_alerts()),
         "interval",
         hours=1
+    )
+    scheduler.add_job(
+        lambda: asyncio.run(send_digest()),
+        "cron", hour=8, minute=0
+    )
+    scheduler.add_job(
+        lambda: asyncio.run(send_digest()),
+        "cron", hour=18, minute=0
     )
 
 if __name__ == "__main__":
