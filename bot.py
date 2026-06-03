@@ -6,6 +6,7 @@ from telegram.constants import ParseMode
 from monitors.wallets import check_all_wallets
 from monitors.tvl import check_tvl
 from monitors.cex_flows import check_cex_flows
+from monitors.solana import check_solana
 from apscheduler.schedulers.background import BackgroundScheduler
 from config import TELEGRAM_TOKEN, TELEGRAM_CHAT_ID
 from database import (
@@ -254,6 +255,23 @@ async def cmd_cex(update: Update, context: ContextTypes.DEFAULT_TYPE):
             disable_web_page_preview=True
         )
 
+async def send_solana_alerts():
+    alerts = check_solana()
+    if not alerts:
+        return
+    bot = Bot(token=TELEGRAM_TOKEN)
+    for alert in alerts:
+        try:
+            await bot.send_message(
+                chat_id=int(TELEGRAM_CHAT_ID),
+                text=alert["message"],
+                parse_mode=ParseMode.MARKDOWN,
+                disable_web_page_preview=True
+            )
+            mark_alert_sent(alert["key"])
+        except Exception as e:
+            logger.error(f"Error Solana alert: {e}")
+
 # ── Comandaments — Protocols ───────────────────────────────────────────────────
 
 async def cmd_add(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -330,6 +348,20 @@ async def send_tvl_alerts():
         except Exception as e:
             logger.error(f"Error TVL alert: {e}")
 
+async def cmd_solana(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.message.reply_text("🟣 Analitzant Solana...")
+    alerts = check_solana()
+    if not alerts:
+        await update.message.reply_text(
+            "✅ Cap cluster ni caiguda de liquiditat detectada ara mateix."
+        )
+        return
+    for alert in alerts:
+        await update.message.reply_text(
+            alert["message"],
+            parse_mode=ParseMode.MARKDOWN,
+            disable_web_page_preview=True
+        )
 
 # ── Comandament Start ──────────────────────────────────────────────────────────
 
@@ -346,7 +378,8 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "`/remove <slug>` — elimina protocol\n"
         "`/list` — llista protocols\n"
         "`/tvl` — estat TVL de la watchlist\n"
-        "`/cex` — CEX inflows i txns grans en protocols\n",
+        "`/cex` — CEX inflows i txns grans en protocols\n"
+        "`/solana` — clusters i liquiditat a Solana\n",
         parse_mode=ParseMode.MARKDOWN
     )
 
@@ -375,6 +408,7 @@ def main():
     app.add_handler(CommandHandler("start", cmd_start))
     app.add_handler(CommandHandler("tvl", cmd_tvl))
     app.add_handler(CommandHandler("cex", cmd_cex))
+    app.add_handler(CommandHandler("solana", cmd_solana))
 
     logger.info("Bot v2 escoltant...")
     app.run_polling(allowed_updates=Update.ALL_TYPES)
@@ -399,6 +433,11 @@ def main():
     )
     scheduler.add_job(
         lambda: asyncio.run(send_cex_alerts()),
+        "interval",
+        hours=1
+    )
+    scheduler.add_job(
+        lambda: asyncio.run(send_solana_alerts()),
         "interval",
         hours=1
     )
