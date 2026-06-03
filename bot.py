@@ -5,6 +5,7 @@ from telegram.ext import Application, CommandHandler, ContextTypes
 from telegram.constants import ParseMode
 from monitors.wallets import check_all_wallets
 from monitors.tvl import check_tvl
+from monitors.cex_flows import check_cex_flows
 from apscheduler.schedulers.background import BackgroundScheduler
 from config import TELEGRAM_TOKEN, TELEGRAM_CHAT_ID
 from database import (
@@ -227,6 +228,40 @@ async def cmd_tvl(update: Update, context: ContextTypes.DEFAULT_TYPE):
             disable_web_page_preview=True
         )
 
+async def send_cex_alerts():
+    alerts = check_cex_flows()
+    if not alerts:
+        return
+    bot = Bot(token=TELEGRAM_TOKEN)
+    for alert in alerts:
+        try:
+            await bot.send_message(
+                chat_id=int(TELEGRAM_CHAT_ID),
+                text=alert["message"],
+                parse_mode=ParseMode.MARKDOWN,
+                disable_web_page_preview=True
+            )
+            mark_alert_sent(alert["key"])
+        except Exception as e:
+            logger.error(f"Error CEX alert: {e}")
+
+async def cmd_cex(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.message.reply_text("🏦 Analitzant CEX flows...")
+    alerts = check_cex_flows()
+    if not alerts:
+        await update.message.reply_text(
+            "✅ Cap CEX inflow significatiu detectat.\n"
+            "_Cap wallet seguida ni protocol amb txns grans recents._",
+            parse_mode=ParseMode.MARKDOWN
+        )
+        return
+    for alert in alerts:
+        await update.message.reply_text(
+            alert["message"],
+            parse_mode=ParseMode.MARKDOWN,
+            disable_web_page_preview=True
+        )
+
 # ── Comandaments — Protocols ───────────────────────────────────────────────────
 
 async def cmd_add(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -318,7 +353,8 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "`/add <slug>` — afegeix protocol\n"
         "`/remove <slug>` — elimina protocol\n"
         "`/list` — llista protocols\n"
-        "`/tvl` — estat TVL de la watchlist\n",
+        "`/tvl` — estat TVL de la watchlist\n"
+        "`/cex` — CEX inflows i txns grans en protocols\n",
         parse_mode=ParseMode.MARKDOWN
     )
 
@@ -346,6 +382,7 @@ def main():
     app.add_handler(CommandHandler("list", cmd_list))
     app.add_handler(CommandHandler("start", cmd_start))
     app.add_handler(CommandHandler("tvl", cmd_tvl))
+    app.add_handler(CommandHandler("cex", cmd_cex))
 
     logger.info("Bot v2 escoltant...")
     app.run_polling(allowed_updates=Update.ALL_TYPES)
@@ -368,7 +405,11 @@ def main():
         hour=18,
         minute=30
     )
-
+    scheduler.add_job(
+        lambda: asyncio.run(send_cex_alerts()),
+        "interval",
+        hours=1
+    )
 
 if __name__ == "__main__":
     main()
