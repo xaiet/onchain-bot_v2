@@ -13,16 +13,11 @@ from config import TELEGRAM_TOKEN, TELEGRAM_CHAT_ID
 from database import (
     init_db,
     get_protocols, add_protocol, remove_protocol,
-    get_wallets, add_wallet, remove_wallet, update_wallet_label
+    get_wallets, add_wallet, remove_wallet, update_wallet_label,
+    mark_alert_sent
 )
 from analysis.wallet_profiler import (
     profile_evm_wallet, profile_solana_wallet, format_wallet_profile
-)
-from database import (
-    init_db,
-    get_protocols, add_protocol, remove_protocol,
-    get_wallets, add_wallet, remove_wallet, update_wallet_label,
-    mark_alert_sent
 )
 
 logging.basicConfig(level=logging.INFO)
@@ -82,7 +77,6 @@ async def cmd_wallet(update: Update, context: ContextTypes.DEFAULT_TYPE):
         disable_web_page_preview=True
     )
 
-    # Pregunta si vol guardar-la
     await update.message.reply_text(
         f"💾 Vols guardar aquesta wallet a la teva llista de seguiment?\n"
         f"`/addwallet {address} <etiqueta>`\n\n"
@@ -184,6 +178,9 @@ async def cmd_wallets(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     await update.message.reply_text("\n".join(lines))
 
+
+# ── Scheduled alert senders ────────────────────────────────────────────────────
+
 async def send_wallet_alerts():
     """Job del scheduler — comprova wallets i envia alertes"""
     alerts = check_all_wallets()
@@ -202,25 +199,26 @@ async def send_wallet_alerts():
             mark_alert_sent(alert["key"])
             logger.info(f"Wallet alert enviada: {alert['key']}")
         except Exception as e:
-            logger.error(f"Error: {e}")
+            logger.error(f"Error wallet alert: {e}")
 
-async def cmd_tvl(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("📊 Analitzant TVL de la watchlist...")
+
+async def send_tvl_alerts():
     alerts = check_tvl()
     if not alerts:
-        await update.message.reply_text(
-            "✅ Cap anomalia de TVL detectada.\n"
-            "_Tots els protocols dins la mitjana dels últims 30 dies._",
-            parse_mode=ParseMode.MARKDOWN
-        )
         return
     bot = Bot(token=TELEGRAM_TOKEN)
     for alert in alerts:
-        await update.message.reply_text(
-            alert["message"],
-            parse_mode=ParseMode.MARKDOWN,
-            disable_web_page_preview=True
-        )
+        try:
+            await bot.send_message(
+                chat_id=int(TELEGRAM_CHAT_ID),
+                text=alert["message"],
+                parse_mode=ParseMode.MARKDOWN,
+                disable_web_page_preview=True
+            )
+            mark_alert_sent(alert["key"])
+        except Exception as e:
+            logger.error(f"Error TVL alert: {e}")
+
 
 async def send_cex_alerts():
     alerts = check_cex_flows()
@@ -239,22 +237,6 @@ async def send_cex_alerts():
         except Exception as e:
             logger.error(f"Error CEX alert: {e}")
 
-async def cmd_cex(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("🏦 Analitzant CEX flows...")
-    alerts = check_cex_flows()
-    if not alerts:
-        await update.message.reply_text(
-            "✅ Cap CEX inflow significatiu detectat.\n"
-            "_Cap wallet seguida ni protocol amb txns grans recents._",
-            parse_mode=ParseMode.MARKDOWN
-        )
-        return
-    for alert in alerts:
-        await update.message.reply_text(
-            alert["message"],
-            parse_mode=ParseMode.MARKDOWN,
-            disable_web_page_preview=True
-        )
 
 async def send_solana_alerts():
     alerts = check_solana()
@@ -272,6 +254,89 @@ async def send_solana_alerts():
             mark_alert_sent(alert["key"])
         except Exception as e:
             logger.error(f"Error Solana alert: {e}")
+
+
+async def send_digest():
+    bot = Bot(token=TELEGRAM_TOKEN)
+    try:
+        message = build_digest()
+        await bot.send_message(
+            chat_id=int(TELEGRAM_CHAT_ID),
+            text=message,
+            parse_mode=ParseMode.MARKDOWN,
+            disable_web_page_preview=True
+        )
+        logger.info("Digest enviat")
+    except Exception as e:
+        logger.error(f"Error digest: {e}")
+
+
+# ── Comandaments — Monitors ────────────────────────────────────────────────────
+
+async def cmd_tvl(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.message.reply_text("📊 Analitzant TVL de la watchlist...")
+    alerts = check_tvl()
+    if not alerts:
+        await update.message.reply_text(
+            "✅ Cap anomalia de TVL detectada.\n"
+            "_Tots els protocols dins la mitjana dels últims 30 dies._",
+            parse_mode=ParseMode.MARKDOWN
+        )
+        return
+    for alert in alerts:
+        await update.message.reply_text(
+            alert["message"],
+            parse_mode=ParseMode.MARKDOWN,
+            disable_web_page_preview=True
+        )
+
+
+async def cmd_cex(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.message.reply_text("🏦 Analitzant CEX flows...")
+    alerts = check_cex_flows()
+    if not alerts:
+        await update.message.reply_text(
+            "✅ Cap CEX inflow significatiu detectat.\n"
+            "_Cap wallet seguida ni protocol amb txns grans recents._",
+            parse_mode=ParseMode.MARKDOWN
+        )
+        return
+    for alert in alerts:
+        await update.message.reply_text(
+            alert["message"],
+            parse_mode=ParseMode.MARKDOWN,
+            disable_web_page_preview=True
+        )
+
+
+async def cmd_solana(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.message.reply_text("🟣 Analitzant Solana...")
+    alerts = check_solana()
+    if not alerts:
+        await update.message.reply_text(
+            "✅ Cap cluster ni caiguda de liquiditat detectada ara mateix."
+        )
+        return
+    for alert in alerts:
+        await update.message.reply_text(
+            alert["message"],
+            parse_mode=ParseMode.MARKDOWN,
+            disable_web_page_preview=True
+        )
+
+
+async def cmd_digest(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.message.reply_text("⏳ Construint digest...")
+    try:
+        message = build_digest()
+        await update.message.reply_text(
+            message,
+            parse_mode=ParseMode.MARKDOWN,
+            disable_web_page_preview=True
+        )
+    except Exception as e:
+        await update.message.reply_text(f"❌ Error: {e}")
+
 
 # ── Comandaments — Protocols ───────────────────────────────────────────────────
 
@@ -332,65 +397,6 @@ async def cmd_list(update: Update, context: ContextTypes.DEFAULT_TYPE):
         lines.append(f"• {p['name']} (`{p['defillama_slug']}`)")
     await update.message.reply_text("\n".join(lines), parse_mode=ParseMode.MARKDOWN)
 
-async def send_tvl_alerts():
-    alerts = check_tvl()
-    if not alerts:
-        return
-    bot = Bot(token=TELEGRAM_TOKEN)
-    for alert in alerts:
-        try:
-            await bot.send_message(
-                chat_id=int(TELEGRAM_CHAT_ID),
-                text=alert["message"],
-                parse_mode=ParseMode.MARKDOWN,
-                disable_web_page_preview=True
-            )
-            mark_alert_sent(alert["key"])
-        except Exception as e:
-            logger.error(f"Error TVL alert: {e}")
-
-async def cmd_solana(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("🟣 Analitzant Solana...")
-    alerts = check_solana()
-    if not alerts:
-        await update.message.reply_text(
-            "✅ Cap cluster ni caiguda de liquiditat detectada ara mateix."
-        )
-        return
-    for alert in alerts:
-        await update.message.reply_text(
-            alert["message"],
-            parse_mode=ParseMode.MARKDOWN,
-            disable_web_page_preview=True
-        )
-
-async def send_digest():
-    bot = Bot(token=TELEGRAM_TOKEN)
-    try:
-        message = build_digest()
-        await bot.send_message(
-            chat_id=int(TELEGRAM_CHAT_ID),
-            text=message,
-            parse_mode=ParseMode.MARKDOWN,
-            disable_web_page_preview=True
-        )
-        logger.info("Digest enviat")
-    except Exception as e:
-        logger.error(f"Error digest: {e}")
-
-async def cmd_digest(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("⏳ Construint digest...")
-    try:
-        message = build_digest()
-        await update.message.reply_text(
-            message,
-            parse_mode=ParseMode.MARKDOWN,
-            disable_web_page_preview=True
-        )
-    except Exception as e:
-        await update.message.reply_text(f"❌ Error: {e}")
-
-app.add_handler(CommandHandler("digest", cmd_digest))
 
 # ── Comandament Start ──────────────────────────────────────────────────────────
 
@@ -416,10 +422,6 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 def main():
     init_db()
 
-    scheduler = BackgroundScheduler(timezone="UTC")
-    scheduler.start()
-    logger.info("Scheduler iniciat")
-
     app = Application.builder().token(TELEGRAM_TOKEN).build()
 
     # Wallets
@@ -432,31 +434,32 @@ def main():
     app.add_handler(CommandHandler("add", cmd_add))
     app.add_handler(CommandHandler("remove", cmd_remove))
     app.add_handler(CommandHandler("list", cmd_list))
-    app.add_handler(CommandHandler("start", cmd_start))
+
+    # Monitors
     app.add_handler(CommandHandler("tvl", cmd_tvl))
     app.add_handler(CommandHandler("cex", cmd_cex))
     app.add_handler(CommandHandler("solana", cmd_solana))
+    app.add_handler(CommandHandler("digest", cmd_digest))
 
-    logger.info("Bot v2 escoltant...")
-    app.run_polling(allowed_updates=Update.ALL_TYPES)
+    # Start
+    app.add_handler(CommandHandler("start", cmd_start))
 
+    # Scheduler — must be started BEFORE run_polling
+    scheduler = BackgroundScheduler(timezone="UTC")
     scheduler.add_job(
         lambda: asyncio.run(send_wallet_alerts()),
         "interval",
         minutes=30
     )
-    # TVL — comprova 2 cops al dia
     scheduler.add_job(
         lambda: asyncio.run(send_tvl_alerts()),
         "cron",
-        hour=8,
-        minute=30
+        hour=8, minute=30
     )
     scheduler.add_job(
         lambda: asyncio.run(send_tvl_alerts()),
         "cron",
-        hour=18,
-        minute=30
+        hour=18, minute=30
     )
     scheduler.add_job(
         lambda: asyncio.run(send_cex_alerts()),
@@ -476,6 +479,12 @@ def main():
         lambda: asyncio.run(send_digest()),
         "cron", hour=18, minute=0
     )
+    scheduler.start()
+    logger.info("Scheduler iniciat")
+
+    logger.info("Bot v2 escoltant...")
+    app.run_polling(allowed_updates=Update.ALL_TYPES)  # blocks — always last
+
 
 if __name__ == "__main__":
     main()
