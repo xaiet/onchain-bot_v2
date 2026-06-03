@@ -152,43 +152,35 @@ async def cmd_removewallet(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def cmd_wallets(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """
-    /wallets
-    Llista totes les wallets en seguiment.
-    """
     wallets = get_wallets()
 
     if not wallets:
         await update.message.reply_text(
             "La llista de wallets és buida.\n"
-            "Afegeix-ne amb `/wallet <address>` i després `/addwallet`.",
-            parse_mode=ParseMode.MARKDOWN
+            "Afegeix-ne amb /wallet <address> i després /addwallet"
         )
         return
 
     evm_wallets = [w for w in wallets if w["chain"] == "evm"]
     sol_wallets = [w for w in wallets if w["chain"] == "solana"]
 
-    lines = [f"👁️ *Wallets en seguiment ({len(wallets)})*\n"]
+    lines = [f"👁️ Wallets en seguiment ({len(wallets)})\n"]
 
     if evm_wallets:
-        lines.append("*🔷 EVM*")
+        lines.append("🔷 EVM")
         for w in evm_wallets:
             addr_short = w["address"][:6] + "..." + w["address"][-4:]
             label = f" — {w['label']}" if w["label"] else ""
-            lines.append(f"   `{addr_short}`{label}")
+            lines.append(f"  {addr_short}{label}")
 
     if sol_wallets:
-        lines.append("\n*🟣 Solana*")
+        lines.append("\n🟣 Solana")
         for w in sol_wallets:
             addr_short = w["address"][:6] + "..." + w["address"][-4:]
             label = f" — {w['label']}" if w["label"] else ""
-            lines.append(f"   `{addr_short}`{label}")
+            lines.append(f"  {addr_short}{label}")
 
-    await update.message.reply_text(
-        "\n".join(lines),
-        parse_mode=ParseMode.MARKDOWN
-    )
+    await update.message.reply_text("\n".join(lines))
 
 async def send_wallet_alerts():
     """Job del scheduler — comprova wallets i envia alertes"""
