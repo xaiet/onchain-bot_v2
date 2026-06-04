@@ -217,70 +217,73 @@ def profile_solana_wallet(address: str) -> dict:
 
     return profile
 
+def _esc(text: str) -> str:
+    """Escapa caràcters especials de Markdown V1 per Telegram"""
+    if not text:
+        return ""
+    # En MarkdownV1 els problemàtics són: _ * ` [
+    for ch in ["_", "*", "`", "["]:
+        text = str(text).replace(ch, f"\\{ch}")
+    return text
+
 
 # ── Formatador de missatge Telegram ───────────────────────────────────────────
 
 def format_wallet_profile(profile: dict) -> str:
-    """Formata el perfil per enviar-lo per Telegram"""
-
     if profile.get("error") and not profile.get("total_txns"):
-        return f"❌ Error analitzant wallet: {profile['error']}"
+        return f"❌ Error analitzant wallet: {_esc(profile['error'])}"
 
     addr = profile["address"]
-    short_addr = addr[:6] + "..." + addr[-4:]
     chain = profile["chain"]
-
     lines = []
 
     if chain == "evm":
         lines.append(f"🔍 *Wallet Profile — EVM*")
         lines.append(f"`{addr}`\n")
 
-        # Identitat
         lines.append(f"*📋 Identitat*")
-        lines.append(f"   Activa des de: {profile.get('first_tx_date', 'N/A')} ({profile.get('age_days', '?')} dies)")
-        lines.append(f"   Última activitat: {profile.get('last_tx_date', 'N/A')}")
-        lines.append(f"   Tipus: *{profile.get('profile_type', 'Unknown')}*\n")
+        lines.append(f"   Activa des de: {_esc(profile.get('first_tx_date', 'N/A'))} ({profile.get('age_days', '?')} dies)")
+        lines.append(f"   Última activitat: {_esc(profile.get('last_tx_date', 'N/A'))}")
+        lines.append(f"   Tipus: *{_esc(profile.get('profile_type', 'Unknown'))}*\n")
 
-        # Capital
         lines.append(f"*💰 Capital*")
         lines.append(f"   ETH: {profile['eth_balance']:.3f} (~${profile['eth_balance_usd']:,.0f})")
         if profile.get("top_tokens"):
             for token in profile["top_tokens"][:3]:
-                lines.append(f"   {token['symbol']}: {token['balance']}")
+                lines.append(f"   {_esc(token['symbol'])}: {_esc(str(token['balance']))}")
         lines.append("")
 
-        # Activitat
         lines.append(f"*📊 Activitat*")
         lines.append(f"   Total txns: {profile['total_txns']}")
         lines.append(f"   Últims 30d: {profile['txns_last_30d']} txns ({profile['active_days_last_30d']} dies actiu)")
         lines.append(f"   Mitjana: {profile['avg_txns_per_day']} txns/dia\n")
 
-        # Comportament
         lines.append(f"*🎯 Comportament*")
         lines.append(f"   Tx mitjana: {profile['avg_tx_value_eth']:.3f} ETH")
         lines.append(f"   Tx màxima: {profile['largest_tx_eth']:.3f} ETH")
 
         if profile["protocols_used"]:
-            lines.append(f"   Protocols: {', '.join(profile['protocols_used'][:5])}")
+            protos = ", ".join(_esc(p) for p in profile["protocols_used"][:5])
+            lines.append(f"   Protocols: {protos}")
 
         if profile["cex_interactions"]:
-            lines.append(f"   ⚠️ Envia a CEX: {', '.join(profile['cex_interactions'])}")
+            cexs = ", ".join(_esc(c) for c in profile["cex_interactions"])
+            lines.append(f"   ⚠️ Envia a CEX: {cexs}")
         lines.append("")
 
-        # Últimes txns
         if profile["last_10_txns"]:
             lines.append(f"*🕐 Últimes transaccions*")
             for tx in profile["last_10_txns"][:5]:
                 icon = "📤" if tx["direction"] == "OUT" else "📥"
                 lines.append(
-                    f"   {icon} {tx['date']} | "
-                    f"{tx['value_eth']} ETH → {tx['to']}"
+                    f"   {icon} {_esc(tx['date'])} | "
+                    f"{tx['value_eth']} ETH → {_esc(str(tx['to']))}"
                 )
 
-        # Links
-        lines.append(f"\n[Etherscan](https://etherscan.io/address/{addr}) | "
-                    f"[Arkham](https://platform.arkhamintelligence.com/explorer/address/{addr})")
+        lines.append(
+            f"\n[Etherscan](https://etherscan.io/address/{addr}) | "
+            f"[Arkham](https://platform.arkhamintelligence.com/explorer/address/{addr})"
+        )
 
     else:  # Solana
         lines.append(f"🔍 *Wallet Profile — Solana*")
@@ -291,22 +294,25 @@ def format_wallet_profile(profile: dict) -> str:
 
         lines.append(f"*📊 Activitat*")
         lines.append(f"   Txns analitzades: {profile['total_txns']}")
-        lines.append(f"   Última activitat: {profile.get('last_tx_date', 'N/A')}")
-        lines.append(f"   Tipus: *{profile.get('profile_type', 'Unknown')}*\n")
+        lines.append(f"   Última activitat: {_esc(profile.get('last_tx_date', 'N/A'))}")
+        lines.append(f"   Tipus: *{_esc(profile.get('profile_type', 'Unknown'))}*\n")
 
         if profile["dexs_used"]:
             lines.append(f"*🔄 DEXs usats*")
-            lines.append(f"   {', '.join(profile['dexs_used'])}\n")
+            lines.append(f"   {', '.join(_esc(d) for d in profile['dexs_used'])}\n")
 
         if profile["last_10_txns"]:
             lines.append(f"*🕐 Últimes transaccions*")
             for tx in profile["last_10_txns"][:5]:
-                lines.append(f"   [{tx['date']}] {tx['type']} via {tx['source']}")
+                lines.append(f"   [{_esc(tx['date'])}] {_esc(tx['type'])} via {_esc(tx['source'])}")
                 if tx["description"]:
-                    lines.append(f"   _{tx['description']}_")
+                    # Les descripcions de Helius sovint contenen _ (adreces, noms de tokens)
+                    lines.append(f"   _{_esc(tx['description'])}_")
 
-        lines.append(f"\n[Solscan](https://solscan.io/account/{addr}) | "
-                    f"[Helius](https://xray.helius.xyz/account/{addr})")
+        lines.append(
+            f"\n[Solscan](https://solscan.io/account/{addr}) | "
+            f"[Helius](https://xray.helius.xyz/account/{addr})"
+        )
 
     return "\n".join(lines)
 
