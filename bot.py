@@ -16,6 +16,7 @@ from database import (
     get_wallets, add_wallet, remove_wallet, update_wallet_label,
     mark_alert_sent
 )
+from analysis.wallet_commands import register_wallet_commands
 from analysis.wallet_profiler import (
     profile_evm_wallet, profile_solana_wallet, format_wallet_profile
 )
@@ -479,6 +480,7 @@ def main():
         lambda: asyncio.run(send_digest()),
         "cron", hour=18, minute=0
     )
+    register_wallet_commands(app)
     scheduler.start()
     logger.info("Scheduler iniciat")
 
