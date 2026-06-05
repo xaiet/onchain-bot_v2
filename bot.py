@@ -16,32 +16,25 @@ from database import (
     get_wallets, add_wallet, remove_wallet, update_wallet_label,
     mark_alert_sent
 )
-from analysis.wallet_commands import register_wallet_commands
 from analysis.wallet_profiler import (
     profile_evm_wallet, profile_solana_wallet, format_wallet_profile
 )
+from analysis.wallet_analyzer import get_wallet_pnl, get_wallet_score, compare_wallets
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-
 # ── Helpers ────────────────────────────────────────────────────────────────────
 
 def is_solana_address(address: str) -> bool:
-    """Solana addresses són base58, 32-44 chars, sense 0x"""
     return not address.startswith("0x") and 32 <= len(address) <= 44
 
 def is_evm_address(address: str) -> bool:
     return address.startswith("0x") and len(address) == 42
 
-
 # ── Comandaments — Wallets ─────────────────────────────────────────────────────
 
 async def cmd_wallet(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """
-    /wallet <address>
-    Analitza una wallet EVM o Solana i mostra el perfil complet.
-    """
     if not context.args:
         await update.message.reply_text(
             "Ús: `/wallet <address>`\n\n"
@@ -51,9 +44,7 @@ async def cmd_wallet(update: Update, context: ContextTypes.DEFAULT_TYPE):
             parse_mode=ParseMode.MARKDOWN
         )
         return
-
     address = context.args[0].strip()
-
     if not is_evm_address(address) and not is_solana_address(address):
         await update.message.reply_text(
             "❌ Adreça no vàlida.\n"
@@ -62,22 +53,17 @@ async def cmd_wallet(update: Update, context: ContextTypes.DEFAULT_TYPE):
             parse_mode=ParseMode.MARKDOWN
         )
         return
-
     await update.message.reply_text("🔍 Analitzant wallet... (pot trigar 10-20 segons)")
-
     if is_evm_address(address):
         profile = profile_evm_wallet(address)
     else:
         profile = profile_solana_wallet(address)
-
     message = format_wallet_profile(profile)
-
     await update.message.reply_text(
         message,
         parse_mode=ParseMode.MARKDOWN,
         disable_web_page_preview=True
     )
-
     await update.message.reply_text(
         f"💾 Vols guardar aquesta wallet a la teva llista de seguiment?\n"
         f"`/addwallet {address} <etiqueta>`\n\n"
@@ -85,12 +71,7 @@ async def cmd_wallet(update: Update, context: ContextTypes.DEFAULT_TYPE):
         parse_mode=ParseMode.MARKDOWN
     )
 
-
 async def cmd_addwallet(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """
-    /addwallet <address> <label>
-    Afegeix una wallet al seguiment.
-    """
     if len(context.args) < 1:
         await update.message.reply_text(
             "Ús: `/addwallet <address> <etiqueta opcional>`\n\n"
@@ -100,17 +81,13 @@ async def cmd_addwallet(update: Update, context: ContextTypes.DEFAULT_TYPE):
             parse_mode=ParseMode.MARKDOWN
         )
         return
-
     address = context.args[0].strip()
     label = " ".join(context.args[1:]) if len(context.args) > 1 else None
-
     if not is_evm_address(address) and not is_solana_address(address):
         await update.message.reply_text("❌ Adreça no vàlida.")
         return
-
     chain = "evm" if is_evm_address(address) else "solana"
     success = add_wallet(address, label=label, chain=chain)
-
     if success:
         label_str = f" com *{label}*" if label else ""
         chain_emoji = "🔷" if chain == "evm" else "🟣"
@@ -121,73 +98,100 @@ async def cmd_addwallet(update: Update, context: ContextTypes.DEFAULT_TYPE):
             parse_mode=ParseMode.MARKDOWN
         )
     else:
-        await update.message.reply_text(
-            f"⚠️ Aquesta wallet ja està a la llista.",
-            parse_mode=ParseMode.MARKDOWN
-        )
-
+        await update.message.reply_text("⚠️ Aquesta wallet ja està a la llista.", parse_mode=ParseMode.MARKDOWN)
 
 async def cmd_removewallet(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """
-    /removewallet <address>
-    Elimina una wallet del seguiment.
-    """
     if not context.args:
-        await update.message.reply_text(
-            "Ús: `/removewallet <address>`",
-            parse_mode=ParseMode.MARKDOWN
-        )
+        await update.message.reply_text("Ús: `/removewallet <address>`", parse_mode=ParseMode.MARKDOWN)
         return
-
     address = context.args[0].strip()
     success = remove_wallet(address)
-
     if success:
-        await update.message.reply_text(f"🗑️ Wallet eliminada del seguiment.")
+        await update.message.reply_text("🗑️ Wallet eliminada del seguiment.")
     else:
-        await update.message.reply_text(f"❌ No he trobat aquesta wallet a la llista.")
-
+        await update.message.reply_text("❌ No he trobat aquesta wallet a la llista.")
 
 async def cmd_wallets(update: Update, context: ContextTypes.DEFAULT_TYPE):
     wallets = get_wallets()
-
     if not wallets:
         await update.message.reply_text(
             "La llista de wallets és buida.\n"
             "Afegeix-ne amb /wallet <address> i després /addwallet"
         )
         return
-
     evm_wallets = [w for w in wallets if w["chain"] == "evm"]
     sol_wallets = [w for w in wallets if w["chain"] == "solana"]
-
     lines = [f"👁️ Wallets en seguiment ({len(wallets)})\n"]
-
     if evm_wallets:
         lines.append("🔷 EVM")
         for w in evm_wallets:
             addr_short = w["address"][:6] + "..." + w["address"][-4:]
             label = f" — {w['label']}" if w["label"] else ""
-            lines.append(f"  {addr_short}{label}")
-
+            lines.append(f" {addr_short}{label}")
     if sol_wallets:
         lines.append("\n🟣 Solana")
         for w in sol_wallets:
             addr_short = w["address"][:6] + "..." + w["address"][-4:]
             label = f" — {w['label']}" if w["label"] else ""
-            lines.append(f"  {addr_short}{label}")
-
+            lines.append(f" {addr_short}{label}")
     await update.message.reply_text("\n".join(lines))
 
+# ── Wallet Analysis ────────────────────────────────────────────────────────────
+
+async def cmd_wallet_pnl(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if len(context.args) < 2:
+        await update.message.reply_text(
+            "⚠️ *Ús:* `/wallet_pnl <wallet> <token>`\n\nEx: `/wallet_pnl 7xKX... EPjF...`",
+            parse_mode=ParseMode.MARKDOWN
+        )
+        return
+    wallet = context.args[0].strip()
+    token  = context.args[1].strip()
+    msg = await update.message.reply_text("🔍 Analitzant PnL... (Helius + Birdeye, ~10s)")
+    try:
+        result = await get_wallet_pnl(wallet, token)
+        await msg.edit_text(result, parse_mode=ParseMode.MARKDOWN, disable_web_page_preview=True)
+    except Exception as e:
+        await msg.edit_text(f"❌ Error: `{e}`", parse_mode=ParseMode.MARKDOWN)
+
+async def cmd_wallet_score(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if len(context.args) < 1:
+        await update.message.reply_text(
+            "⚠️ *Ús:* `/wallet_score <wallet>`\n\nEx: `/wallet_score 7xKX...`",
+            parse_mode=ParseMode.MARKDOWN
+        )
+        return
+    wallet = context.args[0].strip()
+    msg = await update.message.reply_text("🎯 Calculant score (últims 20 tokens)...")
+    try:
+        result = await get_wallet_score(wallet, num_tokens=20)
+        await msg.edit_text(result, parse_mode=ParseMode.MARKDOWN)
+    except Exception as e:
+        await msg.edit_text(f"❌ Error: `{e}`", parse_mode=ParseMode.MARKDOWN)
+
+async def cmd_compare(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if len(context.args) < 3:
+        await update.message.reply_text(
+            "⚠️ *Ús:* `/compare <wallet1> <wallet2> <token>`\n\nEx: `/compare 7xKX... 9mPQ... EPjF...`",
+            parse_mode=ParseMode.MARKDOWN
+        )
+        return
+    wallet1 = context.args[0].strip()
+    wallet2 = context.args[1].strip()
+    token   = context.args[2].strip()
+    msg = await update.message.reply_text("🕵️ Comparant wallets...")
+    try:
+        result = await compare_wallets(wallet1, wallet2, token)
+        await msg.edit_text(result, parse_mode=ParseMode.MARKDOWN, disable_web_page_preview=True)
+    except Exception as e:
+        await msg.edit_text(f"❌ Error: `{e}`", parse_mode=ParseMode.MARKDOWN)
 
 # ── Scheduled alert senders ────────────────────────────────────────────────────
 
 async def send_wallet_alerts():
-    """Job del scheduler — comprova wallets i envia alertes"""
     alerts = check_all_wallets()
     if not alerts:
         return
-
     bot = Bot(token=TELEGRAM_TOKEN)
     for alert in alerts:
         try:
@@ -201,7 +205,6 @@ async def send_wallet_alerts():
             logger.info(f"Wallet alert enviada: {alert['key']}")
         except Exception as e:
             logger.error(f"Error wallet alert: {e}")
-
 
 async def send_tvl_alerts():
     alerts = check_tvl()
@@ -220,7 +223,6 @@ async def send_tvl_alerts():
         except Exception as e:
             logger.error(f"Error TVL alert: {e}")
 
-
 async def send_cex_alerts():
     alerts = check_cex_flows()
     if not alerts:
@@ -237,7 +239,6 @@ async def send_cex_alerts():
             mark_alert_sent(alert["key"])
         except Exception as e:
             logger.error(f"Error CEX alert: {e}")
-
 
 async def send_solana_alerts():
     alerts = check_solana()
@@ -256,7 +257,6 @@ async def send_solana_alerts():
         except Exception as e:
             logger.error(f"Error Solana alert: {e}")
 
-
 async def send_digest():
     bot = Bot(token=TELEGRAM_TOKEN)
     try:
@@ -271,7 +271,6 @@ async def send_digest():
     except Exception as e:
         logger.error(f"Error digest: {e}")
 
-
 # ── Comandaments — Monitors ────────────────────────────────────────────────────
 
 async def cmd_tvl(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -285,12 +284,7 @@ async def cmd_tvl(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         return
     for alert in alerts:
-        await update.message.reply_text(
-            alert["message"],
-            parse_mode=ParseMode.MARKDOWN,
-            disable_web_page_preview=True
-        )
-
+        await update.message.reply_text(alert["message"], parse_mode=ParseMode.MARKDOWN, disable_web_page_preview=True)
 
 async def cmd_cex(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("🏦 Analitzant CEX flows...")
@@ -303,55 +297,33 @@ async def cmd_cex(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         return
     for alert in alerts:
-        await update.message.reply_text(
-            alert["message"],
-            parse_mode=ParseMode.MARKDOWN,
-            disable_web_page_preview=True
-        )
-
+        await update.message.reply_text(alert["message"], parse_mode=ParseMode.MARKDOWN, disable_web_page_preview=True)
 
 async def cmd_solana(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("🟣 Analitzant Solana...")
     alerts = check_solana()
     if not alerts:
-        await update.message.reply_text(
-            "✅ Cap cluster ni caiguda de liquiditat detectada ara mateix."
-        )
+        await update.message.reply_text("✅ Cap cluster ni caiguda de liquiditat detectada ara mateix.")
         return
     for alert in alerts:
-        await update.message.reply_text(
-            alert["message"],
-            parse_mode=ParseMode.MARKDOWN,
-            disable_web_page_preview=True
-        )
-
+        await update.message.reply_text(alert["message"], parse_mode=ParseMode.MARKDOWN, disable_web_page_preview=True)
 
 async def cmd_digest(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("⏳ Construint digest...")
     try:
         message = build_digest()
-        await update.message.reply_text(
-            message,
-            parse_mode=ParseMode.MARKDOWN,
-            disable_web_page_preview=True
-        )
+        await update.message.reply_text(message, parse_mode=ParseMode.MARKDOWN, disable_web_page_preview=True)
     except Exception as e:
         await update.message.reply_text(f"❌ Error: {e}")
-
 
 # ── Comandaments — Protocols ───────────────────────────────────────────────────
 
 async def cmd_add(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not context.args:
-        await update.message.reply_text(
-            "Ús: `/add <slug>` — ex: `/add aave`",
-            parse_mode=ParseMode.MARKDOWN
-        )
+        await update.message.reply_text("Ús: `/add <slug>` — ex: `/add aave`", parse_mode=ParseMode.MARKDOWN)
         return
-
     slug = context.args[0].lower().strip()
     await update.message.reply_text(f"🔍 Verificant `{slug}` a DefiLlama...", parse_mode=ParseMode.MARKDOWN)
-
     try:
         import requests
         response = requests.get(f"https://api.llama.fi/protocol/{slug}", timeout=10)
@@ -367,26 +339,22 @@ async def cmd_add(update: Update, context: ContextTypes.DEFAULT_TYPE):
     except Exception:
         await update.message.reply_text("⚠️ Error connectant amb DefiLlama.")
         return
-
     success = add_protocol(name, slug)
     if success:
         await update.message.reply_text(f"✅ *{name}* afegit!", parse_mode=ParseMode.MARKDOWN)
     else:
         await update.message.reply_text(f"⚠️ `{slug}` ja està a la llista.", parse_mode=ParseMode.MARKDOWN)
 
-
 async def cmd_remove(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not context.args:
         await update.message.reply_text("Ús: `/remove <slug>`", parse_mode=ParseMode.MARKDOWN)
         return
-
     slug = context.args[0].lower().strip()
     success = remove_protocol(slug)
     if success:
         await update.message.reply_text(f"🗑️ `{slug}` eliminat.", parse_mode=ParseMode.MARKDOWN)
     else:
         await update.message.reply_text(f"❌ No he trobat `{slug}`.", parse_mode=ParseMode.MARKDOWN)
-
 
 async def cmd_list(update: Update, context: ContextTypes.DEFAULT_TYPE):
     protocols = get_protocols()
@@ -397,7 +365,6 @@ async def cmd_list(update: Update, context: ContextTypes.DEFAULT_TYPE):
     for p in protocols:
         lines.append(f"• {p['name']} (`{p['defillama_slug']}`)")
     await update.message.reply_text("\n".join(lines), parse_mode=ParseMode.MARKDOWN)
-
 
 # ── Comandament Start ──────────────────────────────────────────────────────────
 
@@ -411,82 +378,59 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "`/addwallet <addr> <label>` — segueix wallet\n"
         "`/removewallet <addr>` — deixa de seguir\n"
         "`/wallets` — llista wallets\n"
+        "`/wallet_pnl <addr> <token>` — PnL detallat amb USD\n"
+        "`/wallet_score <addr>` — score últims 20 tokens\n"
+        "`/compare <w1> <w2> <token>` — detecta coordinació\n"
         "`/add <slug>` — afegeix protocol\n"
         "`/remove <slug>` — elimina protocol\n"
         "`/list` — llista protocols\n",
         parse_mode=ParseMode.MARKDOWN
     )
 
-
 # ── Main ───────────────────────────────────────────────────────────────────────
 
 def main():
     init_db()
-
     app = Application.builder().token(TELEGRAM_TOKEN).build()
 
     # Wallets
-    app.add_handler(CommandHandler("wallet", cmd_wallet))
-    app.add_handler(CommandHandler("addwallet", cmd_addwallet))
+    app.add_handler(CommandHandler("wallet",       cmd_wallet))
+    app.add_handler(CommandHandler("addwallet",    cmd_addwallet))
     app.add_handler(CommandHandler("removewallet", cmd_removewallet))
-    app.add_handler(CommandHandler("wallets", cmd_wallets))
+    app.add_handler(CommandHandler("wallets",      cmd_wallets))
+
+    # Wallet Analysis
+    app.add_handler(CommandHandler("wallet_pnl",   cmd_wallet_pnl))
+    app.add_handler(CommandHandler("wallet_score", cmd_wallet_score))
+    app.add_handler(CommandHandler("compare",      cmd_compare))
 
     # Protocols
-    app.add_handler(CommandHandler("add", cmd_add))
+    app.add_handler(CommandHandler("add",    cmd_add))
     app.add_handler(CommandHandler("remove", cmd_remove))
-    app.add_handler(CommandHandler("list", cmd_list))
+    app.add_handler(CommandHandler("list",   cmd_list))
 
     # Monitors
-    app.add_handler(CommandHandler("tvl", cmd_tvl))
-    app.add_handler(CommandHandler("cex", cmd_cex))
+    app.add_handler(CommandHandler("tvl",    cmd_tvl))
+    app.add_handler(CommandHandler("cex",    cmd_cex))
     app.add_handler(CommandHandler("solana", cmd_solana))
     app.add_handler(CommandHandler("digest", cmd_digest))
 
     # Start
     app.add_handler(CommandHandler("start", cmd_start))
 
-    # Scheduler — must be started BEFORE run_polling
     scheduler = BackgroundScheduler(timezone="UTC")
-    scheduler.add_job(
-        lambda: asyncio.run(send_wallet_alerts()),
-        "interval",
-        minutes=30
-    )
-    scheduler.add_job(
-        lambda: asyncio.run(send_tvl_alerts()),
-        "cron",
-        hour=8, minute=30
-    )
-    scheduler.add_job(
-        lambda: asyncio.run(send_tvl_alerts()),
-        "cron",
-        hour=18, minute=30
-    )
-    scheduler.add_job(
-        lambda: asyncio.run(send_cex_alerts()),
-        "interval",
-        hours=1
-    )
-    scheduler.add_job(
-        lambda: asyncio.run(send_solana_alerts()),
-        "interval",
-        hours=1
-    )
-    scheduler.add_job(
-        lambda: asyncio.run(send_digest()),
-        "cron", hour=8, minute=0
-    )
-    scheduler.add_job(
-        lambda: asyncio.run(send_digest()),
-        "cron", hour=18, minute=0
-    )
-    register_wallet_commands(app)
+    scheduler.add_job(lambda: asyncio.run(send_wallet_alerts()), "interval", minutes=30)
+    scheduler.add_job(lambda: asyncio.run(send_tvl_alerts()),    "cron", hour=8,  minute=30)
+    scheduler.add_job(lambda: asyncio.run(send_tvl_alerts()),    "cron", hour=18, minute=30)
+    scheduler.add_job(lambda: asyncio.run(send_cex_alerts()),    "interval", hours=1)
+    scheduler.add_job(lambda: asyncio.run(send_solana_alerts()), "interval", hours=1)
+    scheduler.add_job(lambda: asyncio.run(send_digest()),        "cron", hour=8,  minute=0)
+    scheduler.add_job(lambda: asyncio.run(send_digest()),        "cron", hour=18, minute=0)
     scheduler.start()
+
     logger.info("Scheduler iniciat")
-
     logger.info("Bot v2 escoltant...")
-    app.run_polling(allowed_updates=Update.ALL_TYPES)  # blocks — always last
-
+    app.run_polling(allowed_updates=Update.ALL_TYPES)
 
 if __name__ == "__main__":
     main()
