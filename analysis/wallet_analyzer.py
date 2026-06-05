@@ -22,6 +22,20 @@ SKIP_MINTS = {
     "Es9vMFrzaCERmJfrF4H2FYD4KCoNkY11McCe8BenwNYB",
 }
 
+# CEX i entitats conegudes — si el pare és un d'aquests, és un humà normal
+KNOWN_ENTITIES = {
+    "5tzFkiKscXHK5ms71DkVpK5LfQfQzTMGJ5xGQ8PbDnRm": "Binance",
+    "AC5RDfQFmDS1deWZos921JfqscXdByf8BKHs5ACWjtW2": "Binance",
+    "2ojv9BAiHUrvsm9gxDe7fJSzbNZSJcxZvf8dqmWGHG8S": "Coinbase",
+    "H8sMJSCQxfKiFTCfDR3DUMLPwcRbM61LGFJ8N4dK3WjS": "Coinbase",
+    "9WzDXwBbmkg8ZTbNMqUxvQRAyrZzDsGYdLVL9zYtAWWM": "Kraken",
+    "CakcnaRDHka2gXyfxNmcggyu6B9dE9psIaETIAMVGoiR": "OKX",
+}
+
+
+# ─────────────────────────────────────────────
+# HELIUS
+# ─────────────────────────────────────────────
 
 async def _fetch_transactions(session, wallet: str, limit: int = 100) -> list:
     url    = f"{HELIUS_BASE}/addresses/{wallet}/transactions"
@@ -32,6 +46,21 @@ async def _fetch_transactions(session, wallet: str, limit: int = 100) -> list:
     except Exception:
         return []
 
+
+async def _fetch_all_transactions(session, wallet: str, limit: int = 50) -> list:
+    """Agafa TOTES les txs (no només SWAPs) — necessari per trobar transfers."""
+    url    = f"{HELIUS_BASE}/addresses/{wallet}/transactions"
+    params = {"api-key": HELIUS_API_KEY, "limit": limit}
+    try:
+        async with session.get(url, params=params, timeout=aiohttp.ClientTimeout(total=15)) as r:
+            return await r.json() if r.status == 200 else []
+    except Exception:
+        return []
+
+
+# ─────────────────────────────────────────────
+# BIRDEYE
+# ─────────────────────────────────────────────
 
 async def _birdeye_price_at(session, mint: str, timestamp: int) -> Optional[float]:
     if not BIRDEYE_API_KEY:
@@ -87,6 +116,10 @@ async def _dexscreener_meta(session, mint: str) -> dict:
         return {}
 
 
+# ─────────────────────────────────────────────
+# PARSING SWAPS
+# ─────────────────────────────────────────────
+
 def _parse_swaps(transactions: list, token_mint: str) -> list:
     mint  = token_mint.lower()
     swaps = []
@@ -134,6 +167,10 @@ async def _enrich_usd(session, swaps: list, mint: str) -> list:
     return swaps
 
 
+# ─────────────────────────────────────────────
+# PnL
+# ─────────────────────────────────────────────
+
 def _calc_pnl(swaps: list, current_usd: Optional[float] = None) -> dict:
     buys  = [s for s in swaps if s["type"] == "BUY"]
     sells = [s for s in swaps if s["type"] == "SELL"]
@@ -165,6 +202,201 @@ def _calc_pnl(swaps: list, current_usd: Optional[float] = None) -> dict:
         "profitable": realized_sol > 0, "current_usd": current_usd, "tok_left": tok_left,
     }
 
+
+# ─────────────────────────────────────────────
+# WALLET PARENT — helpers
+# ─────────────────────────────────────────────
+
+def _extract_sol_senders(transactions: list, wallet: str) -> list:
+    """
+    Extreu les adreces que han enviat SOL a la wallet donada.
+    Retorna llista de {sender, amount_sol, timestamp} ordenada per timestamp ASC.
+    """
+    wallet  = wallet.lower()
+    senders = []
+
+    for tx in transactions:
+        tx_type = tx.get("type", "")
+
+        # Helius marca transfers de SOL com TRANSFER o SOL_TRANSFER
+        if tx_type not in ("TRANSFER", "SOL_TRANSFER", "UNKNOWN"):
+            continue
+
+        ts = tx.get("timestamp", 0)
+
+        # Mirem nativeTransfers (SOL natiu)
+        for nt in tx.get("nativeTransfers", []):
+            to_acc   = (nt.get("toUserAccount")   or "").lower()
+            from_acc = (nt.get("fromUserAccount") or "").lower()
+            amount   = (nt.get("amount") or 0) / 1e9
+
+            if to_acc == wallet and from_acc and from_acc != wallet and amount > 0.001:
+                senders.append({
+                    "sender":     nt.get("fromUserAccount"),
+                    "amount_sol": amount,
+                    "timestamp":  ts,
+                    "datetime":   datetime.fromtimestamp(ts, tz=timezone.utc).strftime("%d %b %H:%M UTC"),
+                })
+
+    return sorted(senders, key=lambda x: x["timestamp"])
+
+
+async def _count_wallets_funded(session, parent_wallet: str) -> int:
+    """
+    Compta quantes wallets diferents ha finançat el pare.
+    Agafa les seves txs de TRANSFER i compta destinataris únics.
+    """
+    txs = await _fetch_all_transactions(session, parent_wallet, limit=100)
+    funded = set()
+    parent_lower = parent_wallet.lower()
+
+    for tx in txs:
+        if tx.get("type") not in ("TRANSFER", "SOL_TRANSFER", "UNKNOWN"):
+            continue
+        for nt in tx.get("nativeTransfers", []):
+            from_acc = (nt.get("fromUserAccount") or "").lower()
+            to_acc   = (nt.get("toUserAccount")   or "").lower()
+            amount   = (nt.get("amount") or 0) / 1e9
+            if from_acc == parent_lower and to_acc and to_acc != parent_lower and amount > 0.001:
+                funded.add(to_acc)
+
+    return len(funded)
+
+
+async def _get_wallet_age(session, wallet: str) -> Optional[str]:
+    """Retorna la data de la primera transacció coneguda de la wallet."""
+    url    = f"{HELIUS_BASE}/addresses/{wallet}/transactions"
+    params = {"api-key": HELIUS_API_KEY, "limit": 100}
+    try:
+        async with session.get(url, params=params, timeout=aiohttp.ClientTimeout(total=10)) as r:
+            if r.status != 200:
+                return None
+            txs = await r.json()
+            if not txs:
+                return None
+            # Les txs venen en ordre DESC, l'última és la més antiga
+            oldest = txs[-1].get("timestamp", 0)
+            if oldest:
+                return datetime.fromtimestamp(oldest, tz=timezone.utc).strftime("%d %b %Y")
+    except Exception:
+        pass
+    return None
+
+
+# ─────────────────────────────────────────────
+# /wallet_parent — funció pública
+# ─────────────────────────────────────────────
+
+async def get_wallet_parent(wallet: str, hops: int = 2) -> str:
+    """
+    Troba la wallet pare d'una wallet operativa seguint els SOL transfers
+    fins a hops nivells enrere. Detecta si el pare és un coordinador de cluster.
+    """
+    async with aiohttp.ClientSession() as session:
+        # Pas 1: txs de la wallet objectiu (sense filtre de tipus per agafar transfers)
+        txs = await _fetch_all_transactions(session, wallet, limit=100)
+
+    if not txs:
+        return "❌ No s'han trobat transaccions per aquesta wallet."
+
+    # Pas 2: busca qui li ha enviat SOL (hop 1)
+    senders = _extract_sol_senders(txs, wallet)
+
+    if not senders:
+        return (
+            f"🔍 *Wallet:* `{wallet[:6]}...{wallet[-4:]}`\n\n"
+            f"❓ No s'ha trobat cap transfer de SOL entrant.\n"
+            f"Pot ser que la wallet s'hagi finançat via CEX directament "
+            f"o que les txs siguin massa antigues per Helius."
+        )
+
+    # El primer sender és el candidat a pare (finançament inicial)
+    first_sender = senders[0]
+    parent       = first_sender["sender"]
+    parent_short = f"`{parent[:6]}...{parent[-4:]}`"
+
+    # Pas 3: anàlisi del pare
+    async with aiohttp.ClientSession() as session:
+        funded_count, parent_age, parent_txs = await asyncio.gather(
+            _count_wallets_funded(session, parent),
+            _get_wallet_age(session, parent),
+            _fetch_all_transactions(session, parent, limit=100),
+        )
+
+    # Pas 4: hop 2 — qui ha finançat el pare?
+    grandparent      = None
+    grandparent_info = ""
+    if hops >= 2 and parent_txs:
+        gp_senders = _extract_sol_senders(parent_txs, parent)
+        if gp_senders:
+            grandparent       = gp_senders[0]["sender"]
+            gp_short          = f"`{grandparent[:6]}...{grandparent[-4:]}`"
+            gp_entity         = KNOWN_ENTITIES.get(grandparent, "")
+            gp_entity_str     = f" ({gp_entity})" if gp_entity else ""
+            async with aiohttp.ClientSession() as session:
+                gp_funded = await _count_wallets_funded(session, grandparent)
+            grandparent_info  = (
+                f"\n\n🔗 *Hop 2 — Avi:* {gp_short}{gp_entity_str}\n"
+                f"  • Wallets finançades: {gp_funded}"
+            )
+            if gp_funded >= 5:
+                grandparent_info += " 🚨 *possible coordinador major*"
+
+    # Pas 5: classifica el pare
+    known_entity  = KNOWN_ENTITIES.get(parent, "")
+    entity_str    = f" — *{known_entity}*" if known_entity else ""
+
+    if known_entity:
+        cluster_verdict = "🏦 *Origen: Exchange conegut* — actor humà normal, difícil de seguir més amunt."
+    elif funded_count >= 10:
+        cluster_verdict = f"🚨 *Alta probabilitat de coordinador de cluster* — ha finançat {funded_count} wallets."
+    elif funded_count >= 3:
+        cluster_verdict = f"⚠️ *Possible coordinador* — ha finançat {funded_count} wallets."
+    else:
+        cluster_verdict = f"✅ *Pare individual* — ha finançat {funded_count} wallet(s), no sembla coordinador."
+
+    # Pas 6: tots els senders (per si n'hi ha més d'un)
+    extra_senders = ""
+    if len(senders) > 1:
+        extra_lines = []
+        for s in senders[1:4]:  # màxim 3 addicionals
+            s_entity = KNOWN_ENTITIES.get(s["sender"], "")
+            s_entity_str = f" ({s_entity})" if s_entity else ""
+            extra_lines.append(
+                f"  • `{s['sender'][:6]}...{s['sender'][-4:]}`{s_entity_str} "
+                f"— {s['amount_sol']:.3f} SOL el {s['datetime']}"
+            )
+        extra_senders = "\n\n📨 *Altres senders de SOL:*\n" + "\n".join(extra_lines)
+
+    age_str = f"\n  • Primera tx: {parent_age}" if parent_age else ""
+
+    lines = [
+        f"🔍 *Wallet analitzada:* `{wallet[:6]}...{wallet[-4:]}`",
+        f"",
+        f"👆 *Hop 1 — Pare directe:* {parent_short}{entity_str}",
+        f"  • Va enviar: {first_sender['amount_sol']:.3f} SOL el {first_sender['datetime']}",
+        f"  • Wallets finançades pel pare: {funded_count}{age_str}",
+        f"",
+        f"📊 *Veredicte:* {cluster_verdict}",
+    ]
+
+    if grandparent_info:
+        lines.append(grandparent_info)
+
+    if extra_senders:
+        lines.append(extra_senders)
+
+    lines += [
+        f"",
+        f"🔗 *Solscan:* https://solscan.io/account/{parent}",
+    ]
+
+    return "\n".join(lines)
+
+
+# ─────────────────────────────────────────────
+# /wallet_pnl
+# ─────────────────────────────────────────────
 
 async def get_wallet_pnl(wallet: str, token_mint: str) -> str:
     async with aiohttp.ClientSession() as session:
@@ -213,6 +445,10 @@ async def get_wallet_pnl(wallet: str, token_mint: str) -> str:
             lines.append(f"📦 *Posició oberta:* {pnl['tok_left']:,.0f} tokens restants")
     return "\n".join(lines)
 
+
+# ─────────────────────────────────────────────
+# /wallet_score
+# ─────────────────────────────────────────────
 
 async def get_wallet_score(wallet: str, num_tokens: int = 20) -> str:
     async with aiohttp.ClientSession() as session:
@@ -266,6 +502,10 @@ async def get_wallet_score(wallet: str, num_tokens: int = 20) -> str:
         f"💡 *Interpretació:* {verdict}",
     ])
 
+
+# ─────────────────────────────────────────────
+# /compare
+# ─────────────────────────────────────────────
 
 async def compare_wallets(wallet1: str, wallet2: str, token_mint: str) -> str:
     async with aiohttp.ClientSession() as session:

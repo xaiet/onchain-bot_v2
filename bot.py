@@ -19,7 +19,7 @@ from database import (
 from analysis.wallet_profiler import (
     profile_evm_wallet, profile_solana_wallet, format_wallet_profile
 )
-from analysis.wallet_analyzer import get_wallet_pnl, get_wallet_score, compare_wallets
+from analysis.wallet_analyzer import get_wallet_pnl, get_wallet_score, compare_wallets, get_wallet_parent
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -182,6 +182,21 @@ async def cmd_compare(update: Update, context: ContextTypes.DEFAULT_TYPE):
     msg = await update.message.reply_text("🕵️ Comparant wallets...")
     try:
         result = await compare_wallets(wallet1, wallet2, token)
+        await msg.edit_text(result, parse_mode=ParseMode.MARKDOWN, disable_web_page_preview=True)
+    except Exception as e:
+        await msg.edit_text(f"❌ Error: `{e}`", parse_mode=ParseMode.MARKDOWN)
+
+async def cmd_wallet_parent(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if len(context.args) < 1:
+        await update.message.reply_text(
+            "⚠️ *Ús:* `/wallet_parent <wallet>`\n\nEx: `/wallet_parent 7xKX...`",
+            parse_mode=ParseMode.MARKDOWN
+        )
+        return
+    wallet = context.args[0].strip()
+    msg = await update.message.reply_text("🔗 Rastrejant wallet pare... (2 hops, ~15s)")
+    try:
+        result = await get_wallet_parent(wallet, hops=2)
         await msg.edit_text(result, parse_mode=ParseMode.MARKDOWN, disable_web_page_preview=True)
     except Exception as e:
         await msg.edit_text(f"❌ Error: `{e}`", parse_mode=ParseMode.MARKDOWN)
@@ -381,6 +396,7 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "`/wallet_pnl <addr> <token>` — PnL detallat amb USD\n"
         "`/wallet_score <addr>` — score últims 20 tokens\n"
         "`/compare <w1> <w2> <token>` — detecta coordinació\n"
+        "`/wallet_parent <addr>` — troba la wallet pare del cluster\n"
         "`/add <slug>` — afegeix protocol\n"
         "`/remove <slug>` — elimina protocol\n"
         "`/list` — llista protocols\n",
@@ -403,6 +419,7 @@ def main():
     app.add_handler(CommandHandler("wallet_pnl",   cmd_wallet_pnl))
     app.add_handler(CommandHandler("wallet_score", cmd_wallet_score))
     app.add_handler(CommandHandler("compare",      cmd_compare))
+    app.add_handler(CommandHandler("wallet_parent", cmd_wallet_parent))
 
     # Protocols
     app.add_handler(CommandHandler("add",    cmd_add))
