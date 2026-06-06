@@ -32,6 +32,11 @@ def is_solana_address(address: str) -> bool:
 def is_evm_address(address: str) -> bool:
     return address.startswith("0x") and len(address) == 42
 
+def truncate(text: str, limit: int = 4000) -> str:
+    if len(text) <= limit:
+        return text
+    return text[:limit] + "\n\n_...missatge truncat (massa llarg)_"
+
 # ── Comandaments — Wallets ─────────────────────────────────────────────────────
 
 async def cmd_wallet(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -150,7 +155,7 @@ async def cmd_wallet_pnl(update: Update, context: ContextTypes.DEFAULT_TYPE):
     msg = await update.message.reply_text("🔍 Analitzant PnL... (Helius + Birdeye, ~10s)")
     try:
         result = await get_wallet_pnl(wallet, token)
-        await msg.edit_text(result, parse_mode=ParseMode.MARKDOWN, disable_web_page_preview=True)
+        await msg.edit_text(truncate(result), parse_mode=ParseMode.MARKDOWN, disable_web_page_preview=True)
     except Exception as e:
         await msg.edit_text(f"❌ Error: `{e}`", parse_mode=ParseMode.MARKDOWN)
 
@@ -165,7 +170,7 @@ async def cmd_wallet_score(update: Update, context: ContextTypes.DEFAULT_TYPE):
     msg = await update.message.reply_text("🎯 Calculant score (últims 20 tokens)...")
     try:
         result = await get_wallet_score(wallet, num_tokens=20)
-        await msg.edit_text(result, parse_mode=ParseMode.MARKDOWN)
+        await msg.edit_text(truncate(result), parse_mode=ParseMode.MARKDOWN)
     except Exception as e:
         await msg.edit_text(f"❌ Error: `{e}`", parse_mode=ParseMode.MARKDOWN)
 
@@ -182,7 +187,7 @@ async def cmd_compare(update: Update, context: ContextTypes.DEFAULT_TYPE):
     msg = await update.message.reply_text("🕵️ Comparant wallets...")
     try:
         result = await compare_wallets(wallet1, wallet2, token)
-        await msg.edit_text(result, parse_mode=ParseMode.MARKDOWN, disable_web_page_preview=True)
+        await msg.edit_text(truncate(result), parse_mode=ParseMode.MARKDOWN, disable_web_page_preview=True)
     except Exception as e:
         await msg.edit_text(f"❌ Error: `{e}`", parse_mode=ParseMode.MARKDOWN)
 
