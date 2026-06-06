@@ -23,6 +23,7 @@ from analysis.wallet_analyzer import get_wallet_pnl, get_wallet_score, compare_w
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
+HELIUS_API_KEY   = os.getenv("HELIUS_API_KEY")
 
 # ── Helpers ────────────────────────────────────────────────────────────────────
 
