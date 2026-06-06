@@ -115,45 +115,84 @@ async def _dexscreener_meta(session, mint: str) -> dict:
 # PARSING SWAPS
 # ─────────────────────────────────────────────
 
+WSOL_MINT = "So11111111111111111111111111111111111111112"
+
 def _parse_swaps(transactions: list, token_mint: str) -> list:
     mint  = token_mint.lower()
     swaps = []
+
     for tx in transactions:
-        if tx.get("type") != "SWAP":
-            continue
         swap = tx.get("events", {}).get("swap", {})
         if not swap:
             continue
-        ts         = tx.get("timestamp", 0)
-        dt         = datetime.fromtimestamp(ts, tz=timezone.utc).strftime("%d %b %H:%M UTC")
+
+        ts       = tx.get("timestamp", 0)
+        dt       = datetime.fromtimestamp(ts, tz=timezone.utc).strftime("%d %b %H:%M UTC")
+        tok_ins  = swap.get("tokenInputs", [])
+        tok_outs = swap.get("tokenOutputs", [])
+
         native_in  = swap.get("nativeInput")
         native_out = swap.get("nativeOutput")
-        tok_ins    = swap.get("tokenInputs", [])
-        tok_outs   = swap.get("tokenOutputs", [])
-        is_buy  = native_in  is not None and any(t.get("mint","").lower() == mint for t in tok_outs)
-        is_sell = native_out is not None and any(t.get("mint","").lower() == mint for t in tok_ins)
-        if is_buy:
+
+        # ── Helpers per extreure amount d'un token ──────────────────────────
+        def token_amount(tok):
+            dec = tok.get("tokenAmount", {}).get("decimals", 6)
+            raw = tok.get("tokenAmount", {}).get("amount", 0) or 0
+            return raw / (10 ** dec)
+
+        def wsol_amount(tok):
+            # wSOL té 9 decimals igual que SOL natiu
+            dec = tok.get("tokenAmount", {}).get("decimals", 9)
+            raw = tok.get("tokenAmount", {}).get("amount", 0) or 0
+            return raw / (10 ** dec)
+
+        # ── Detecta el token objectiu i el SOL/wSOL de l'altre costat ──────
+
+        # BUY cas 1: SOL natiu entra, token surt
+        if native_in and any(t.get("mint","").lower() == mint for t in tok_outs):
             sol_amt = (native_in.get("amount", 0) or 0) / 1e9
             tok     = next((t for t in tok_outs if t.get("mint","").lower() == mint), None)
-            if not tok:
-                continue
-            dec     = tok.get("tokenAmount", {}).get("decimals", 6)
-            tok_amt = (tok.get("tokenAmount", {}).get("amount", 0) or 0) / (10 ** dec)
-            swaps.append({"type": "BUY", "token_amount": tok_amt, "sol_amount": sol_amt,
-                          "price_sol": sol_amt / tok_amt if tok_amt else 0,
-                          "price_usd": None, "timestamp": ts, "datetime": dt})
-        elif is_sell:
+            if tok:
+                tok_amt = token_amount(tok)
+                swaps.append({"type": "BUY", "token_amount": tok_amt, "sol_amount": sol_amt,
+                              "price_sol": sol_amt / tok_amt if tok_amt else 0,
+                              "price_usd": None, "timestamp": ts, "datetime": dt})
+
+        # BUY cas 2: wSOL entra (Pump.fun), token surt
+        elif any(t.get("mint","") == WSOL_MINT for t in tok_ins) and \
+             any(t.get("mint","").lower() == mint for t in tok_outs):
+            wsol = next((t for t in tok_ins if t.get("mint","") == WSOL_MINT), None)
+            tok  = next((t for t in tok_outs if t.get("mint","").lower() == mint), None)
+            if wsol and tok:
+                sol_amt = wsol_amount(wsol)
+                tok_amt = token_amount(tok)
+                swaps.append({"type": "BUY", "token_amount": tok_amt, "sol_amount": sol_amt,
+                              "price_sol": sol_amt / tok_amt if tok_amt else 0,
+                              "price_usd": None, "timestamp": ts, "datetime": dt})
+
+        # SELL cas 1: SOL natiu surt, token entra
+        elif native_out and any(t.get("mint","").lower() == mint for t in tok_ins):
             sol_amt = (native_out.get("amount", 0) or 0) / 1e9
             tok     = next((t for t in tok_ins if t.get("mint","").lower() == mint), None)
-            if not tok:
-                continue
-            dec     = tok.get("tokenAmount", {}).get("decimals", 6)
-            tok_amt = (tok.get("tokenAmount", {}).get("amount", 0) or 0) / (10 ** dec)
-            swaps.append({"type": "SELL", "token_amount": tok_amt, "sol_amount": sol_amt,
-                          "price_sol": sol_amt / tok_amt if tok_amt else 0,
-                          "price_usd": None, "timestamp": ts, "datetime": dt})
-    return sorted(swaps, key=lambda x: x["timestamp"])
+            if tok:
+                tok_amt = token_amount(tok)
+                swaps.append({"type": "SELL", "token_amount": tok_amt, "sol_amount": sol_amt,
+                              "price_sol": sol_amt / tok_amt if tok_amt else 0,
+                              "price_usd": None, "timestamp": ts, "datetime": dt})
 
+        # SELL cas 2: token entra, wSOL surt (Pump.fun)
+        elif any(t.get("mint","").lower() == mint for t in tok_ins) and \
+             any(t.get("mint","") == WSOL_MINT for t in tok_outs):
+            tok  = next((t for t in tok_ins if t.get("mint","").lower() == mint), None)
+            wsol = next((t for t in tok_outs if t.get("mint","") == WSOL_MINT), None)
+            if tok and wsol:
+                sol_amt = wsol_amount(wsol)
+                tok_amt = token_amount(tok)
+                swaps.append({"type": "SELL", "token_amount": tok_amt, "sol_amount": sol_amt,
+                              "price_sol": sol_amt / tok_amt if tok_amt else 0,
+                              "price_usd": None, "timestamp": ts, "datetime": dt})
+
+    return sorted(swaps, key=lambda x: x["timestamp"])
 
 async def _enrich_usd(session, swaps: list, mint: str) -> list:
     prices = await asyncio.gather(*[_birdeye_price_at(session, mint, s["timestamp"]) for s in swaps])
