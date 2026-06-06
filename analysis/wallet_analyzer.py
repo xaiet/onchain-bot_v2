@@ -542,63 +542,39 @@ async def get_wallet_pnl(wallet: str, token_mint: str) -> str:
 # /wallet_score
 # ─────────────────────────────────────────────
 
-async def get_wallet_score(wallet: str, num_tokens: int = 20) -> str:
-    async with aiohttp.ClientSession() as session:
-        txs = await _fetch_transactions(session, wallet, limit=200)
-    if not txs:
-        return "❌ No s'han trobat transaccions per aquesta wallet."
+async def cmd_wallet_score(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if len(context.args) < 1:
+        await update.message.reply_text(
+            "⚠️ *Ús:* `/wallet_score <wallet>`",
+            parse_mode=ParseMode.MARKDOWN
+        )
+        return
+    wallet = context.args[0].strip()
+    msg = await update.message.reply_text("🎯 Calculant score...")
+    try:
+        # DEBUG TEMPORAL
+        import aiohttp
+        async with aiohttp.ClientSession() as session:
+            url    = f"https://api.helius.xyz/v0/addresses/{wallet}/transactions"
+            params = {"api-key": HELIUS_API_KEY, "limit": 5}
+            async with session.get(url, params=params) as r:
+                status = r.status
+                txs    = await r.json()
 
-    mints_seen, seen_set = [], set()
-    for tx in txs:
-        swap = tx.get("events", {}).get("swap", {})
-        for t in swap.get("tokenOutputs", []) + swap.get("tokenInputs", []):
-            mint = t.get("mint", "")
-            if mint and mint not in SKIP_MINTS and mint not in seen_set:
-                seen_set.add(mint)
-                mints_seen.append(mint)
-        # Fallback: també mira tokenTransfers
-        for t in tx.get("tokenTransfers", []):
-            mint = t.get("mint", "")
-            if mint and mint not in SKIP_MINTS and mint not in seen_set:
-                seen_set.add(mint)
-                mints_seen.append(mint)
+        debug_info = f"Status: {status}\nTxs rebudes: {len(txs)}\n"
+        if txs and isinstance(txs, list):
+            for tx in txs[:2]:
+                debug_info += f"\ntype: {tx.get('type')}\n"
+                debug_info += f"swap: {bool(tx.get('events', {}).get('swap'))}\n"
+                debug_info += f"tokenTransfers: {len(tx.get('tokenTransfers', []))}\n"
+                debug_info += f"mints: {[t.get('mint','')[:8] for t in tx.get('tokenTransfers', [])]}\n"
+        elif isinstance(txs, dict):
+            debug_info += f"Error API: {txs}\n"
 
-    results = []
-    for mint in mints_seen[:num_tokens]:
-        swaps = _parse_swaps(txs, mint)
-        if swaps and any(s["type"] == "BUY" for s in swaps):
-            results.append(_calc_pnl(swaps))
+        await msg.edit_text(f"```\n{debug_info}\n```", parse_mode=ParseMode.MARKDOWN)
 
-    if not results:
-        return "❌ No hi ha prou dades per calcular un score."
-
-    total     = len(results)
-    wins      = sum(1 for r in results if r["profitable"])
-    wr        = wins / total * 100
-    avg_roi   = sum(r["roi_pct"] for r in results) / total
-    total_pnl = sum(r["realized_sol"] for r in results)
-    best      = max(results, key=lambda r: r["roi_pct"])
-    worst     = min(results, key=lambda r: r["roi_pct"])
-    score     = min(100, max(0, int(wr * 0.5 + min(avg_roi, 200) * 0.25 + min(total * 2, 25))))
-    s_emoji   = "🔥" if score >= 75 else "✅" if score >= 50 else "⚠️" if score >= 30 else "❌"
-    verdicts  = [(75, "Molt consistent i profitable. Val la pena seguir."),
-                 (50, "Decent. Bons resultats però no excepcional."),
-                 (30, "Resultats mixtes. Vigilar abans d'afegir al watchlist."),
-                 (0,  "Poc profitable. Probablement retail o bot perdedor.")]
-    verdict   = next(v for threshold, v in verdicts if score >= threshold)
-
-    return "\n".join([
-        f"🎯 *Wallet Score* — `{wallet[:6]}...{wallet[-4:]}`", "",
-        f"{s_emoji} *Score: {score}/100*", "",
-        f"📊 *Estadístiques ({total} tokens analitzats):*",
-        f"  • Win Rate: {wr:.1f}% ({wins}/{total})",
-        f"  • ROI mig per trade: {avg_roi:+.1f}%",
-        f"  • PnL total: {total_pnl:+.4f} SOL",
-        f"  • Millor trade: {best['roi_pct']:+.1f}%",
-        f"  • Pitjor trade: {worst['roi_pct']:+.1f}%", "",
-        f"💡 *Interpretació:* {verdict}",
-    ])
-
+    except Exception as e:
+        await msg.edit_text(f"❌ Error: `{e}`", parse_mode=ParseMode.MARKDOWN)
 
 # ─────────────────────────────────────────────
 # /compare
