@@ -486,24 +486,48 @@ async def get_wallet_pnl(wallet: str, token_mint: str) -> str:
     sign   = "+" if pnl["realized_sol"] >= 0 else ""
     emoji  = "✅" if pnl["profitable"] else "❌"
 
-    lines = [f"🔍 *Wallet:* `{wallet[:6]}...{wallet[-4:]}`",
-             f"🪙 *Token:* {name} (${symbol})", "",
-             f"📥 *Compres ({pnl['num_buys']}):*"]
-    for b in [s for s in swaps if s["type"] == "BUY"]:
-        usd = f" ≈ ${b['price_usd']:.6f}" if b["price_usd"] else ""
-        lines.append(f"  • {b['datetime']} — {b['sol_amount']:.3f} SOL @ {b['price_sol']:.2e}{usd}")
-    lines += ["", f"📤 *Vendes ({pnl['num_sells']}):*"]
-    for s in [s for s in swaps if s["type"] == "SELL"]:
-        usd = f" ≈ ${s['price_usd']:.6f}" if s["price_usd"] else ""
-        lines.append(f"  • {s['datetime']} — {s['sol_amount']:.3f} SOL @ {s['price_sol']:.2e}{usd}")
-    lines += ["", "─────────────────────",
-              f"💰 *PnL Realitzat:* {sign}{pnl['realized_sol']:.4f} SOL ({sign}{pnl['roi_pct']:.1f}%) {emoji}"]
+    buys  = [s for s in swaps if s["type"] == "BUY"]
+    sells = [s for s in swaps if s["type"] == "SELL"]
+
+    # Preu mig USD d'entrada i sortida
+    buy_usd_prices  = [b["price_usd"] for b in buys  if b["price_usd"]]
+    sell_usd_prices = [s["price_usd"] for s in sells if s["price_usd"]]
+    avg_buy_usd  = sum(buy_usd_prices)  / len(buy_usd_prices)  if buy_usd_prices  else None
+    avg_sell_usd = sum(sell_usd_prices) / len(sell_usd_prices) if sell_usd_prices else None
+
+    lines = [
+        f"🔍 *Wallet:* `{wallet[:6]}...{wallet[-4:]}`",
+        f"🪙 *Token:* {name} (${symbol})",
+        f"",
+        f"📥 *Compres:* {len(buys)} txs",
+        f"  • Primera: {buys[0]['datetime']}",
+        f"  • Última:  {buys[-1]['datetime']}",
+        f"  • SOL total: {pnl['sol_spent']:.4f} SOL",
+    ]
+    if avg_buy_usd:
+        lines.append(f"  • Preu mig entrada: ${avg_buy_usd:.6f}")
+
+    if sells:
+        lines += [
+            f"",
+            f"📤 *Vendes:* {len(sells)} txs",
+            f"  • Primera: {sells[0]['datetime']}",
+            f"  • Última:  {sells[-1]['datetime']}",
+            f"  • SOL total rebut: {pnl['sol_received']:.4f} SOL",
+        ]
+        if avg_sell_usd:
+            lines.append(f"  • Preu mig sortida: ${avg_sell_usd:.6f}")
+    else:
+        lines += ["", "📤 *Vendes:* cap (posició oberta)"]
+
+    lines += [
+        f"",
+        f"─────────────────────",
+        f"💰 *PnL Realitzat:* {sign}{pnl['realized_sol']:.4f} SOL ({sign}{pnl['roi_pct']:.1f}%) {emoji}",
+    ]
     if pnl["realized_usd"] is not None:
         us = "+" if pnl["realized_usd"] >= 0 else ""
         lines.append(f"💵 *PnL USD:* {us}${pnl['realized_usd']:.2f}")
-    lines.append(f"📊 *Preu mig entrada:* {pnl['avg_buy_sol']:.2e} SOL/token")
-    if pnl["num_sells"] > 0:
-        lines.append(f"📊 *Preu mig sortida:* {pnl['avg_sell_sol']:.2e} SOL/token")
     if pnl["time_in_pos"]:
         lines.append(f"⏱ *Temps en posició:* {pnl['time_in_pos']}")
     if pnl["tok_left"] > 0:
@@ -511,8 +535,8 @@ async def get_wallet_pnl(wallet: str, token_mint: str) -> str:
             lines.append(f"📦 *Unrealized:* {pnl['tok_left']:,.0f} tokens × ${current_usd:.6f} = ${pnl['unrealized_usd']:.2f}")
         else:
             lines.append(f"📦 *Posició oberta:* {pnl['tok_left']:,.0f} tokens restants")
-    return "\n".join(lines)
 
+    return "\n".join(lines)
 
 # ─────────────────────────────────────────────
 # /wallet_score
