@@ -1,8 +1,3 @@
-"""
-analysis/wallet_analyzer.py
-Lògica pura per analitzar wallets Solana via Helius + Birdeye.
-"""
-
 import asyncio
 import aiohttp
 import os
@@ -39,7 +34,7 @@ KNOWN_ENTITIES = {
 
 async def _fetch_transactions(session, wallet: str, limit: int = 100) -> list:
     url    = f"{HELIUS_BASE}/addresses/{wallet}/transactions"
-    params = {"api-key": HELIUS_API_KEY, "limit": limit, "type": "SWAP"}
+    params = {"api-key": HELIUS_API_KEY, "limit": limit}
     try:
         async with session.get(url, params=params, timeout=aiohttp.ClientTimeout(total=15)) as r:
             return await r.json() if r.status == 200 else []
