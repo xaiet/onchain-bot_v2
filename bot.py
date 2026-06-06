@@ -162,15 +162,34 @@ async def cmd_wallet_pnl(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def cmd_wallet_score(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if len(context.args) < 1:
         await update.message.reply_text(
-            "⚠️ *Ús:* `/wallet_score <wallet>`\n\nEx: `/wallet_score 7xKX...`",
+            "⚠️ *Ús:* `/wallet_score <wallet>`",
             parse_mode=ParseMode.MARKDOWN
         )
         return
     wallet = context.args[0].strip()
-    msg = await update.message.reply_text("🎯 Calculant score (últims 20 tokens)...")
+    msg = await update.message.reply_text("🎯 Calculant score...")
     try:
-        result = await get_wallet_score(wallet, num_tokens=20)
-        await msg.edit_text(truncate(result), parse_mode=ParseMode.MARKDOWN)
+        # DEBUG TEMPORAL
+        import aiohttp
+        async with aiohttp.ClientSession() as session:
+            url    = f"https://api.helius.xyz/v0/addresses/{wallet}/transactions"
+            params = {"api-key": HELIUS_API_KEY, "limit": 5}
+            async with session.get(url, params=params) as r:
+                status = r.status
+                txs    = await r.json()
+
+        debug_info = f"Status: {status}\nTxs rebudes: {len(txs)}\n"
+        if txs and isinstance(txs, list):
+            for tx in txs[:2]:
+                debug_info += f"\ntype: {tx.get('type')}\n"
+                debug_info += f"swap: {bool(tx.get('events', {}).get('swap'))}\n"
+                debug_info += f"tokenTransfers: {len(tx.get('tokenTransfers', []))}\n"
+                debug_info += f"mints: {[t.get('mint','')[:8] for t in tx.get('tokenTransfers', [])]}\n"
+        elif isinstance(txs, dict):
+            debug_info += f"Error API: {txs}\n"
+
+        await msg.edit_text(f"```\n{debug_info}\n```", parse_mode=ParseMode.MARKDOWN)
+
     except Exception as e:
         await msg.edit_text(f"❌ Error: `{e}`", parse_mode=ParseMode.MARKDOWN)
 
