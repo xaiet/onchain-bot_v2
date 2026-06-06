@@ -550,10 +550,14 @@ async def get_wallet_score(wallet: str, num_tokens: int = 20) -> str:
 
     mints_seen, seen_set = [], set()
     for tx in txs:
-        if tx.get("type") != "SWAP":
-            continue
         swap = tx.get("events", {}).get("swap", {})
         for t in swap.get("tokenOutputs", []) + swap.get("tokenInputs", []):
+            mint = t.get("mint", "")
+            if mint and mint not in SKIP_MINTS and mint not in seen_set:
+                seen_set.add(mint)
+                mints_seen.append(mint)
+        # Fallback: també mira tokenTransfers
+        for t in tx.get("tokenTransfers", []):
             mint = t.get("mint", "")
             if mint and mint not in SKIP_MINTS and mint not in seen_set:
                 seen_set.add(mint)
@@ -564,6 +568,7 @@ async def get_wallet_score(wallet: str, num_tokens: int = 20) -> str:
         swaps = _parse_swaps(txs, mint)
         if swaps and any(s["type"] == "BUY" for s in swaps):
             results.append(_calc_pnl(swaps))
+
     if not results:
         return "❌ No hi ha prou dades per calcular un score."
 
