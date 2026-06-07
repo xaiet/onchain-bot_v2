@@ -170,6 +170,12 @@ async def cmd_wallets(update: Update, context: ContextTypes.DEFAULT_TYPE):
             addr_short = w["address"][:6] + "..." + w["address"][-4:]
             label = f" — {w['label']}" if w["label"] else ""
             lines.append(f" {addr_short}{label}")
+    if bsc_wallets:
+        lines.append("\n🟡 BSC")
+        for w in bsc_wallets:
+            addr_short = w["address"][:6] + "..." + w["address"][-4:]
+            label = f" — {w['label']}" if w["label"] else ""
+            lines.append(f" {addr_short}{label}")
     await update.message.reply_text("\n".join(lines))
 
 # ── Wallet Analysis ────────────────────────────────────────────────────────────
