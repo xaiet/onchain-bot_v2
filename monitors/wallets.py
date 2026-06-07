@@ -268,7 +268,7 @@ def check_bsc_token_wallet(wallet: dict, token_contract: str = None) -> list:
             token_name = tx.get("tokenName", "???")
 
             # Filtre mínim — ignora moviments petits
-            if amount < 1000:
+            if amount < 50000:
                 continue
 
             alert_key = f"wallet_tokentx_bsc_{tx['hash']}_{tx.get('transactionIndex','')}"
