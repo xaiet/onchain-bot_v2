@@ -227,6 +227,83 @@ def check_solana_wallet(wallet: dict) -> list:
 
     return alerts
 
+def check_bsc_token_wallet(wallet: dict, token_contract: str = None) -> list:
+    """
+    Monitora transfers de tokens BEP20 d'una wallet BSC.
+    Si token_contract és None, monitora tots els tokens.
+    """
+    alerts = []
+    address = wallet["address"].lower()
+    label   = wallet["label"] or address[:6] + "..." + address[-4:]
+    cutoff  = datetime.utcnow() - timedelta(minutes=30)
+
+    params = {
+        "module": "account",
+        "action": "tokentx",
+        "address": address,
+        "startblock": 0,
+        "endblock": 99999999,
+        "page": 1,
+        "offset": 20,
+        "sort": "desc",
+        "apikey": ETHERSCAN_API_KEY
+    }
+    if token_contract:
+        params["contractaddress"] = token_contract
+
+    try:
+        r = requests.get(BSCSCAN_BASE, params=params, timeout=10)
+        data = r.json()
+        if data["status"] != "1":
+            return alerts
+
+        for tx in data["result"]:
+            tx_time = datetime.utcfromtimestamp(int(tx["timeStamp"]))
+            if tx_time < cutoff:
+                break
+
+            decimals  = int(tx.get("tokenDecimal", 18))
+            amount    = int(tx["value"]) / (10 ** decimals)
+            symbol    = tx.get("tokenSymbol", "???")
+            token_name = tx.get("tokenName", "???")
+
+            # Filtre mínim — ignora moviments petits
+            if amount < 1000:
+                continue
+
+            alert_key = f"wallet_tokentx_bsc_{tx['hash']}_{tx.get('transactionIndex','')}"
+            if not should_send_alert(alert_key, cooldown_hours=24):
+                continue
+
+            direction = "📤 OUT" if tx["from"].lower() == address else "📥 IN"
+            to_addr   = tx.get("to", "").lower()
+            cex_label = CEX_ADDRESSES_BSC.get(to_addr)
+            cex_warn  = f"\n   ⚠️ *Destí: {cex_label}* — possible venda" if cex_label else ""
+
+            alerts.append({
+                "key": alert_key,
+                "message": (
+                    f"🐋 *Token Alert BSC — {label}* 🟡\n\n"
+                    f"{direction} `{amount:,.0f}` {symbol}\n"
+                    f"   📋 {token_name}\n"
+                    f"   🕐 {tx_time.strftime('%H:%M UTC')}"
+                    f"{cex_warn}\n\n"
+                    f"[BscScan](https://bscscan.com/tx/{tx['hash']})"
+                )
+            })
+            log_wallet_txn(
+                address=address,
+                tx_hash=tx["hash"],
+                value_usd=0,
+                direction=direction,
+                token=symbol
+            )
+
+    except Exception:
+        pass
+
+    return alerts
+
 
 # ── Monitor principal ──────────────────────────────────────────────────────────
 
@@ -243,5 +320,6 @@ def check_all_wallets() -> list:
             all_alerts.extend(check_solana_wallet(wallet))
         elif wallet["chain"] == "bsc":
             all_alerts.extend(check_bsc_wallet(wallet))
+            all_alerts.extend(check_bsc_token_wallet(wallet))
 
     return all_alerts

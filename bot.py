@@ -29,6 +29,9 @@ logger = logging.getLogger(__name__)
 def is_solana_address(address: str) -> bool:
     return not address.startswith("0x") and 32 <= len(address) <= 44
 
+def is_bsc_address(address: str) -> bool:
+    return address.startswith("0x") and len(address) == 42
+
 def is_evm_address(address: str) -> bool:
     return address.startswith("0x") and len(address) == 42
 
@@ -79,31 +82,59 @@ async def cmd_wallet(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def cmd_addwallet(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if len(context.args) < 1:
         await update.message.reply_text(
-            "Ús: `/addwallet <address> <etiqueta opcional>`\n\n"
+            "Ús: `/addwallet <address> <etiqueta opcional> <chain opcional>`\n\n"
             "Exemples:\n"
-            "`/addwallet 0x123...abc Jump Trading`\n"
-            "`/addwallet 7xKX...sol Solana whale 1`",
+            "`/addwallet 0x123...abc Jump Trading` — Ethereum\n"
+            "`/addwallet 0x123...abc BSB smart 1 bsc` — BSC\n"
+            "`/addwallet 7xKX...sol Solana whale 1` — Solana",
             parse_mode=ParseMode.MARKDOWN
         )
         return
+
     address = context.args[0].strip()
-    label = " ".join(context.args[1:]) if len(context.args) > 1 else None
+
+    # Detecta si l'últim argument és una chain explícita
+    args_rest = context.args[1:]
+    if args_rest and args_rest[-1].lower() in ("bsc", "evm", "solana"):
+        chain_override = args_rest[-1].lower()
+        label_parts    = args_rest[:-1]
+    else:
+        chain_override = None
+        label_parts    = args_rest
+
+    label = " ".join(label_parts) if label_parts else None
+
+    # Valida adreça
     if not is_evm_address(address) and not is_solana_address(address):
         await update.message.reply_text("❌ Adreça no vàlida.")
         return
-    chain = "evm" if is_evm_address(address) else "solana"
+
+    # Determina chain
+    if chain_override:
+        chain = chain_override
+    elif is_solana_address(address):
+        chain = "solana"
+    else:
+        chain = "evm"
+
     success = add_wallet(address, label=label, chain=chain)
+
     if success:
-        label_str = f" com *{label}*" if label else ""
-        chain_emoji = "🔷" if chain == "evm" else "🟣"
+        label_str   = f" com *{label}*" if label else ""
+        chain_emoji = "🔷" if chain == "evm" else "🟡" if chain == "bsc" else "🟣"
+        chain_name  = "Ethereum" if chain == "evm" else "BSC" if chain == "bsc" else "Solana"
         await update.message.reply_text(
             f"{chain_emoji} Wallet afegida{label_str}!\n\n"
-            f"`{address}`\n\n"
+            f"`{address}`\n"
+            f"Chain: *{chain_name}*\n\n"
             f"A partir d'ara el bot la monitora.",
             parse_mode=ParseMode.MARKDOWN
         )
     else:
-        await update.message.reply_text("⚠️ Aquesta wallet ja està a la llista.", parse_mode=ParseMode.MARKDOWN)
+        await update.message.reply_text(
+            "⚠️ Aquesta wallet ja està a la llista.",
+            parse_mode=ParseMode.MARKDOWN
+        )
 
 async def cmd_removewallet(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not context.args:
